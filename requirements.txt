@@ -1,0 +1,25 @@
+# ── Core (Phase 1 — no GPU needed) ──────────────────────────
+groq>=0.9.0
+langchain>=0.3.0
+langchain-community>=0.3.0
+wikipedia>=1.4.0
+pydantic>=2.0.0
+tenacity>=8.2.0
+wandb>=0.17.0
+streamlit>=1.36.0
+python-dotenv>=1.0.0
+pyyaml>=6.0
+tqdm>=4.66.0
+datasets>=2.20.0
+altair>=5.0.0
+pandas>=2.0.0
+
+# ── Phase 2 — GPU required (install separately) ──────────────
+# Run: pip install -r requirements-finetune.txt
+# torch>=2.3.0
+# transformers>=4.42.0
+# peft>=0.11.0
+# bitsandbytes>=0.43.0
+# trl>=0.9.0
+# accelerate>=0.31.0
+# llama-cpp-python>=0.2.80    # for GGUF local inference

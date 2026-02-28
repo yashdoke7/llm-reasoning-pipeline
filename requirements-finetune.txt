@@ -1,0 +1,13 @@
+# Install this AFTER requirements.txt
+# Run: pip install -r requirements-finetune.txt
+
+torch>=2.3.0
+transformers>=4.42.0
+peft>=0.11.0
+bitsandbytes>=0.43.0
+trl>=0.9.0
+accelerate>=0.31.0
+
+# For GGUF local inference benchmarking:
+# llama-cpp-python>=0.2.80
+# GPU build: CMAKE_ARGS="-DLLAMA_CUDA=on" pip install llama-cpp-python

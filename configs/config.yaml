@@ -1,0 +1,154 @@
+# ──────────────────────────────────────────────────────────────
+# LLM Reasoning Evaluation + LoRA Fine-Tuning Pipeline
+# Main Configuration
+# ──────────────────────────────────────────────────────────────
+
+project:
+  name: "llm-reasoning-eval"
+  version: "1.0.0"
+  description: "Step-level LLM reasoning evaluation and targeted LoRA fine-tuning"
+
+# ── API Keys (set via env vars — never hardcode) ──────────────
+api:
+  groq_api_key_env: "GROQ_API_KEY"          # export GROQ_API_KEY=your_key
+  wandb_api_key_env: "WANDB_API_KEY"         # export WANDB_API_KEY=your_key
+  wandb_project: "llm-reasoning-eval"
+  wandb_entity: null                          # set to your W&B username if needed
+
+# ── Models ────────────────────────────────────────────────────
+models:
+  eval_models:
+    - id: "llama-3.1-8b-instant"
+      display_name: "Llama-3.1-8B"
+      provider: "groq"
+    - id: "llama-3.3-70b-versatile"
+      display_name: "Llama-3.3-70B"
+      provider: "groq"
+    - id: "meta-llama/llama-4-scout-17b-16e-instruct"
+      display_name: "Llama-4-Scout"
+      provider: "groq"
+
+  evaluator_model: "llama-3.1-8b-instant"
+  trace_gen_model: "llama-3.3-70b-versatile"
+
+# ── Groq API Settings ─────────────────────────────────────────
+groq:
+  max_retries: 5
+  base_delay: 1.0          # seconds
+  max_delay: 60.0
+  timeout: 30
+  # tokens per minute limits (Groq free tier)
+  tpm_limit: 14400
+  rpm_limit: 30
+
+# ── Evaluation Settings ───────────────────────────────────────
+eval:
+  # Number of samples per task category per model
+  samples_per_category: 50   # start with 50, increase to 150 for full run
+  max_reasoning_steps: 10
+  min_reasoning_steps: 2
+  temperature: 0.1           # low temp for reproducible reasoning
+  max_tokens: 1024
+
+  # Step evaluator thresholds
+  uncertainty_threshold: 0.4  # below this = UNCERTAIN
+  hallucination_threshold: 0.6
+
+  # Task categories
+  categories:
+    - "multistep_arithmetic"
+    - "factual_consistency"
+    - "tool_use_planning"
+    - "causal_counterfactual"
+
+# ── Dataset Settings ──────────────────────────────────────────
+datasets:
+  gsm8k:
+    split: "test"
+    max_samples: 200          # use subset for speed; full test = 1319
+    cache_dir: "data_loaders/data/gsm8k_cache"
+
+  crass:
+    # Download from: https://github.com/apergo-ai/CRASS
+    # Place file at: data_loaders/data/crass_dataset.csv
+    path: "data_loaders/data/crass_dataset.csv"
+    max_samples: 50
+
+  toolbench:
+    # Synthetic tool-use tasks (auto-generated — no download needed)
+    path: "data_loaders/data/toolbench_synthetic.json"
+    max_samples: 50
+
+  factual_synthetic:
+    # Auto-generated from Wikipedia topics
+    path: "data_loaders/data/factual_synthetic.json"
+    max_samples: 50
+    topics:
+      - "climate_change"
+      - "machine_learning"
+      - "world_war_ii"
+      - "quantum_computing"
+      - "space_exploration"
+
+# ── Mitigation Settings ───────────────────────────────────────
+mitigation:
+  retriever:
+    type: "wikipedia"          # "wikipedia" | "local"
+    top_k: 3
+    max_chars_per_doc: 1500
+  regrounder:
+    max_regen_attempts: 2
+    temperature: 0.05
+
+# ── Fine-Tuning Settings ──────────────────────────────────────
+finetune:
+  base_model: "meta-llama/Llama-3.2-3B-Instruct"  # 3B fits easily in 8GB VRAM
+  # Alternative if you want 8B: "meta-llama/Meta-Llama-3-8B-Instruct" (needs 4-bit loading)
+
+  output_dir: "outputs/finetuned_model"
+  dataset_path: "data_loaders/data/finetune_dataset.jsonl"
+
+  lora:
+    r: 16
+    lora_alpha: 32
+    target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]
+    lora_dropout: 0.05
+    bias: "none"
+
+  training:
+    num_epochs: 3
+    per_device_train_batch_size: 4
+    gradient_accumulation_steps: 4    # effective batch = 16
+    learning_rate: 2.0e-4
+    warmup_ratio: 0.03
+    lr_scheduler_type: "cosine"
+    logging_steps: 10
+    save_steps: 100
+    eval_steps: 100
+    max_seq_length: 1024
+    load_in_4bit: true               # QLoRA — required for 8B on 8GB VRAM
+    fp16: false
+    bf16: true                       # use bf16 on modern GPUs (RTX 4070 supports it)
+
+  quantization:
+    output_dir: "outputs/quantized"
+    formats:
+      - name: "Q4_K_M"
+        description: "4-bit, best quality/size tradeoff"
+      - name: "Q8_0"
+        description: "8-bit, near full quality"
+
+# ── Paths ─────────────────────────────────────────────────────
+paths:
+  logs: "logs"
+  outputs: "outputs"
+  charts: "outputs/charts"
+  reports: "outputs/reports"
+  eval_results: "outputs/eval_results.json"
+  failure_report: "outputs/failure_report.json"
+
+# ── Logging ───────────────────────────────────────────────────
+logging:
+  level: "INFO"
+  format: "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
+  file: "logs/pipeline.log"
