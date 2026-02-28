@@ -206,7 +206,3 @@ All settings are in `configs/config.yaml`. Key things to change:
 - `api.wandb_project`: Set to your W&B project name
 
 ---
-
-## Resume Bullet
-
-> Built a step-level LLM reasoning evaluation harness benchmarking 3 open-source models (Llama-3, Mixtral, Gemma-2) across 4 reasoning categories; used failure analysis to guide domain LoRA fine-tuning on Llama-3 with QLoRA, reducing step-failure rate by X%; benchmarked accuracy-efficiency tradeoffs across Q4/Q8 quantization levels.
