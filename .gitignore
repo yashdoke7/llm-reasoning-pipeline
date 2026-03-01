@@ -3,6 +3,9 @@
 venv/
 .venv/
 
+# Large external repos
+llama.cpp/
+
 # Python
 __pycache__/
 *.pyc
@@ -28,6 +31,9 @@ data_loaders/data/factual_synthetic.json
 # OS
 .DS_Store
 Thumbs.db
+
+# llama.cpp (cloned for GGUF conversion only)
+llama.cpp/
 
 # W&B
 wandb/

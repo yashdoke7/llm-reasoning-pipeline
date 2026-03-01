@@ -32,7 +32,8 @@ load_dotenv(_ROOT / ".env")
 import yaml
 from tqdm import tqdm
 
-from models.groq_client import get_client
+from models.groq_client import get_client as _get_groq_client
+from models import get_client
 from eval.task_decomposer import TaskDecomposer, parse_reasoning_trace
 from data_loaders.gsm8k_loader import load_gsm8k
 from data_loaders.crass_loader import load_crass
@@ -127,6 +128,8 @@ def build_dataset(
     cfg: dict,
     target_size: int = 3000,
     output_path: str = "datasets/data/finetune_dataset.jsonl",
+    provider: str = "groq",
+    trace_model_override: str = None,
 ) -> int:
     """
     Generate fine-tuning dataset for a given category.
@@ -141,9 +144,9 @@ def build_dataset(
     Returns:
         Number of examples written
     """
-    client = get_client(cfg)
+    client = get_client(cfg, provider=provider)
     decomposer = TaskDecomposer()
-    trace_model = cfg["models"]["trace_gen_model"]
+    trace_model = trace_model_override or cfg["models"]["trace_gen_model"]
     eval_cfg = cfg["eval"]
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -217,6 +220,10 @@ def main() -> None:
     parser.add_argument("--category", default=None, help="Override target category")
     parser.add_argument("--samples", type=int, default=None, help="Target training examples")
     parser.add_argument("--output", default=None, help="Output JSONL path")
+    parser.add_argument("--provider", choices=["groq", "ollama"], default="ollama",
+                        help="LLM provider for trace generation")
+    parser.add_argument("--trace-model", default=None,
+                        help="Model for generating traces (e.g. qwen2.5:7b)")
     args = parser.parse_args()
 
     config_path = _ROOT / args.config
@@ -257,6 +264,8 @@ def main() -> None:
         cfg=cfg,
         target_size=target_size,
         output_path=output,
+        provider=args.provider,
+        trace_model_override=args.trace_model,
     )
 
     logger.info(f"\nFine-tuning dataset complete: {n} examples at {output}")

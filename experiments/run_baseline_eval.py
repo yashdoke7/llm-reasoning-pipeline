@@ -26,7 +26,8 @@ load_dotenv(_ROOT / ".env")
 
 import yaml
 
-from models.groq_client import GroqClient, get_client
+from models.groq_client import GroqClient, DailyLimitExhaustedError
+from models import get_client
 from eval.task_decomposer import TaskDecomposer
 from eval.step_evaluator import StepEvaluator
 from eval.hallucination_scorer import HallucinationScorer
@@ -206,9 +207,13 @@ def run_model_category(
             category=category,
         )
 
-        # ── 6. Mitigation (only for flagged tasks) ────────────
+        # ── 6. Mitigation (for flagged tasks OR wrong answers) ──
         mitigation_results = {}
-        if run_mitigation and (task_eval.num_invalid > 0 or hall_summary["flagged_steps"] > 0):
+        if run_mitigation and (
+            task_eval.num_invalid > 0
+            or hall_summary["flagged_steps"] > 0
+            or task_eval.final_answer_correct is False
+        ):
             suspicious = [
                 c for s in hall_scores for c in s.suspicious_claims
             ]
@@ -266,6 +271,10 @@ def main() -> None:
     parser.add_argument("--no-wandb", action="store_true", help="Disable W&B logging")
     parser.add_argument("--no-mitigation", action="store_true", help="Skip mitigation runs")
     parser.add_argument("--output", default=None, help="Override output JSON path")
+    parser.add_argument("--provider", choices=["groq", "ollama"], default=None,
+                        help="LLM provider: groq (cloud) or ollama (local)")
+    parser.add_argument("--evaluator", default=None,
+                        help="Override evaluator model (e.g. qwen2.5:3b for Ollama)")
     args = parser.parse_args()
 
     # ── Load config ───────────────────────────────────────────
@@ -286,6 +295,7 @@ def main() -> None:
 
     use_wandb = not args.no_wandb
     run_mitigation = not args.no_mitigation
+    provider = args.provider or cfg.get("provider", "groq")
 
     logger.info("=" * 60)
     logger.info("LLM REASONING EVALUATION — PHASE 1 BASELINE")
@@ -293,23 +303,30 @@ def main() -> None:
     logger.info(f"  Categories: {categories}")
     logger.info(f"  Samples:    {cfg['eval']['samples_per_category']}")
     logger.info(f"  Mitigation: {run_mitigation}")
+    logger.info(f"  Provider:   {provider}")
     logger.info("=" * 60)
 
     # ── Init components ───────────────────────────────────────
-    client = get_client(cfg)
+    client = get_client(cfg, provider=provider)
     decomposer = TaskDecomposer()
+
+    # When using Ollama, use the first --models entry as evaluator if not specified
+    evaluator_model = args.evaluator or cfg["models"]["evaluator_model"]
+    if provider == "ollama" and not args.evaluator:
+        evaluator_model = models[0]
+        logger.info(f"  Ollama mode: using '{evaluator_model}' as evaluator model")
 
     step_evaluator = StepEvaluator(
         client=client,
-        evaluator_model=cfg["models"]["evaluator_model"],
+        evaluator_model=evaluator_model,
     )
     hall_scorer = HallucinationScorer(
         client=client,
-        model=cfg["models"]["evaluator_model"],
+        model=evaluator_model,
     )
     drift_detector = DriftDetector(
         client=client,
-        model=cfg["models"]["evaluator_model"],
+        model=evaluator_model,
     )
     retriever = WikipediaRetriever(
         top_k=cfg["mitigation"]["retriever"]["top_k"],
@@ -342,48 +359,82 @@ def main() -> None:
 
     # ── Main eval loop ────────────────────────────────────────
     all_raw_results = {}
+    daily_limit_hit = False
 
     for model_id in models:
+        if daily_limit_hit:
+            break
         display = model_display.get(model_id, model_id)
         logger.info(f"\nEvaluating model: {display} ({model_id})")
         all_raw_results[display] = {}
 
         for category in categories:
+            if daily_limit_hit:
+                break
             tasks = category_tasks[category]
             logger.info(f"  Category: {category} ({len(tasks)} tasks)")
 
-            results = run_model_category(
-                model_id=model_id,
-                display_name=display,
-                category=category,
-                tasks=tasks,
-                client=client,
-                decomposer=decomposer,
-                step_evaluator=step_evaluator,
-                hall_scorer=hall_scorer,
-                drift_detector=drift_detector,
-                regrounder=regrounder,
-                aggregator=aggregator,
-                eval_cfg=cfg["eval"],
-                run_mitigation=run_mitigation,
-            )
+            try:
+                results = run_model_category(
+                    model_id=model_id,
+                    display_name=display,
+                    category=category,
+                    tasks=tasks,
+                    client=client,
+                    decomposer=decomposer,
+                    step_evaluator=step_evaluator,
+                    hall_scorer=hall_scorer,
+                    drift_detector=drift_detector,
+                    regrounder=regrounder,
+                    aggregator=aggregator,
+                    eval_cfg=cfg["eval"],
+                    run_mitigation=run_mitigation,
+                )
+            except DailyLimitExhaustedError:
+                logger.error("=" * 60)
+                logger.error("DAILY TOKEN LIMIT (TPD) EXHAUSTED — saving partial results")
+                logger.error("Re-run tomorrow or upgrade at console.groq.com/settings/billing")
+                logger.error("=" * 60)
+                daily_limit_hit = True
+                results = []
             all_raw_results[display][category] = results
             logger.info(f"  Done: {len(results)} results")
 
     # ── Finalize metrics ──────────────────────────────────────
-    output_path = args.output or os.path.join(cfg["paths"]["outputs"], "eval_results.json")
+    # Build unique filenames: model_name(s) + mitigation flag + timestamp
+    model_tag = "_".join(m.replace(":", "-").replace("/", "-") for m in models)
+    mit_tag = "mit" if run_mitigation else "nomir"
+    run_ts = int(time.time())
+    run_suffix = f"{model_tag}_{mit_tag}_{run_ts}"
+
+    output_path = args.output or os.path.join(
+        cfg["paths"]["outputs"], f"eval_results_{run_suffix}.json"
+    )
     metrics = aggregator.finalize(output_path=output_path)
     aggregator.finish_run()
 
     # Save raw results
-    raw_path = os.path.join(cfg["paths"]["outputs"], "raw_results.json")
+    raw_path = os.path.join(cfg["paths"]["outputs"], f"raw_results_{run_suffix}.json")
     with open(raw_path, "w") as f:
         json.dump(all_raw_results, f, indent=2)
 
     # Save failure report separately (used by finetune/dataset_builder.py)
-    failure_path = cfg["paths"]["failure_report"]
+    failure_path = os.path.join(
+        cfg["paths"]["outputs"], f"failure_report_{run_suffix}.json"
+    )
     with open(failure_path, "w") as f:
         json.dump(metrics["failure_report"], f, indent=2)
+
+    # Also save a "latest" symlink-style copy for downstream tools
+    for src, dst in [
+        (output_path, os.path.join(cfg["paths"]["outputs"], "eval_results.json")),
+        (raw_path, os.path.join(cfg["paths"]["outputs"], "raw_results.json")),
+        (failure_path, cfg["paths"]["failure_report"]),
+    ]:
+        with open(src) as f_in:
+            data = f_in.read()
+        with open(dst, "w") as f_out:
+            f_out.write(data)
 
     # ── Print summary ─────────────────────────────────────────
     logger.info("\n" + "=" * 60)

@@ -14,6 +14,9 @@ datasets>=2.20.0
 altair>=5.0.0
 pandas>=2.0.0
 
+# ── Local inference (optional — only needed if provider=ollama) ─
+ollama>=0.4.0
+
 # ── Phase 2 — GPU required (install separately) ──────────────
 # Run: pip install -r requirements-finetune.txt
 # torch>=2.3.0

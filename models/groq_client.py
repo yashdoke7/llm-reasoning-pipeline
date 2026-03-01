@@ -33,6 +33,11 @@ class ModelUnavailableError(Exception):
     pass
 
 
+class DailyLimitExhaustedError(Exception):
+    """Raised when the Groq daily token quota (TPD) is exhausted."""
+    pass
+
+
 # ── Response models ───────────────────────────────────────────
 
 class LLMResponse(BaseModel):
@@ -213,7 +218,18 @@ class GroqClient:
     def _complete_with_retry(self, **kwargs: Any) -> Any:
         try:
             return self._client.chat.completions.create(**kwargs)
-        except RateLimitError:
+        except RateLimitError as e:
+            # Detect daily token limit (TPD) — no point retrying for hours
+            err_msg = str(e).lower()
+            if "tokens per day" in err_msg or "tpd" in err_msg:
+                logger.error(
+                    "Daily token limit (TPD) exhausted on Groq free tier. "
+                    "Stopping — retry tomorrow or upgrade at console.groq.com/settings/billing"
+                )
+                raise DailyLimitExhaustedError(
+                    "Groq daily token quota (500K TPD) exhausted. "
+                    "Wait until reset or upgrade to Dev Tier."
+                ) from e
             logger.warning("Groq rate limit hit — backing off")
             raise
         except APIConnectionError:

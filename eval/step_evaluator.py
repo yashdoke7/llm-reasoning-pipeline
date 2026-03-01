@@ -88,6 +88,20 @@ Rules:
 - Be strict but fair. Do not mark a step INVALID just because it could be expressed better."""
 
 
+_BACKTRACK_SYSTEM = """You are a reasoning error analyst. A model solved a problem but got the WRONG answer.
+Given the correct answer, identify exactly which reasoning step FIRST went wrong.
+
+Respond ONLY with valid JSON:
+{
+  "first_error_step": <integer step number>,
+  "error_type": "logic_error" | "hallucination" | "wrong_approach" | "calculation_error" | "missing_step",
+  "explanation": "<what specifically went wrong in that step>"
+}
+
+Be precise. Identify the FIRST step where reasoning diverges from what would lead to the correct answer.
+If the fundamental approach is wrong from the start, say step 1."""
+
+
 def _build_step_eval_prompt(
     problem: str,
     prior_steps: list[ReasoningStep],
@@ -147,12 +161,35 @@ def _check_answer_correctness(
 
     # Substring match for long factual answers
     if category == "factual_consistency":
-        # truth words present in predicted
         truth_words = set(truth.split())
         pred_words = set(pred.split())
         overlap = truth_words & pred_words
         if truth_words and len(overlap) / len(truth_words) > 0.6:
             return True
+
+    # Tool-use: match tool names from ground truth plan against generated steps
+    if category == "tool_use_planning":
+        truth_tools = re.findall(r"(?:call\s+)?(\w+)\s+with", truth, re.I)
+        if truth_tools:
+            matched = sum(1 for t in truth_tools if t.lower() in pred)
+            return matched / len(truth_tools) >= 0.5
+        # Fallback: check if key words from truth appear in pred
+        truth_keywords = [w for w in truth.split() if len(w) > 4]
+        if truth_keywords:
+            matched = sum(1 for w in truth_keywords if w in pred)
+            return matched / len(truth_keywords) >= 0.3
+
+    # Counterfactual: keyword overlap (stricter than factual)
+    if category == "causal_counterfactual":
+        stop = {'the', 'a', 'an', 'is', 'was', 'were', 'would', 'have', 'has',
+                'had', 'been', 'be', 'to', 'of', 'and', 'in', 'that', 'it',
+                'not', 'this', 'if', 'then', 'so', 'but', 'or', 'for', 'with'}
+        truth_content = set(re.findall(r'\w+', truth)) - stop
+        pred_content = set(re.findall(r'\w+', pred)) - stop
+        if truth_content:
+            overlap = len(truth_content & pred_content) / len(truth_content)
+            if overlap >= 0.5:
+                return True
 
     return False
 
@@ -256,15 +293,89 @@ class StepEvaluator:
                 break
 
         # Final answer correctness
+        # For tool_use, use full plan steps as "answer" (not just "Plan complete.")
+        if task.category == "tool_use_planning" and task.steps:
+            predicted_for_match = " ".join(s.text for s in task.steps)
+        else:
+            predicted_for_match = task.final_answer
         result.final_answer_correct = _check_answer_correctness(
-            task.final_answer, task.ground_truth, task.category
+            predicted_for_match, task.ground_truth, task.category
         )
 
         # Error propagation: step failed AND final answer wrong
         if result.first_failure_step is not None and result.final_answer_correct is False:
             result.error_propagated = True
 
+        # Ground-truth-aware backtrack: if answer is WRONG but all steps VALID,
+        # run a second pass to find where reasoning actually diverged
+        if (
+            result.final_answer_correct is False
+            and result.num_invalid == 0
+            and task.ground_truth
+            and len(task.steps) >= 2
+        ):
+            self._ground_truth_backtrack(result, task)
+
         return result
+
+    def _ground_truth_backtrack(
+        self,
+        result: TaskEvaluation,
+        task: DecomposedTask,
+    ) -> None:
+        """
+        Second-pass evaluation: when all steps were marked VALID but the
+        final answer is wrong, use ground truth to identify where reasoning
+        actually diverged. This is the key insight — anchor evaluation in
+        the known-correct answer.
+        """
+        steps_text = "\n".join(f"Step {s.index}: {s.text}" for s in task.steps)
+        prompt = (
+            f"A model was asked to solve this problem:\n\n"
+            f"{task.prompt[:500]}\n\n"
+            f"The CORRECT answer is: {task.ground_truth}\n"
+            f"The model's WRONG answer is: {task.final_answer}\n\n"
+            f"The model's reasoning steps:\n{steps_text}\n\n"
+            f"Identify which step FIRST introduces an error or diverges from "
+            f"the reasoning that would lead to the correct answer."
+        )
+
+        try:
+            raw = self._client.complete_json(
+                model=self._model,
+                user_prompt=prompt,
+                system_prompt=_BACKTRACK_SYSTEM,
+                temperature=0.05,
+                max_tokens=256,
+            )
+
+            error_step = int(raw.get("first_error_step", 1))
+            error_type = str(raw.get("error_type", "reasoning_divergence"))
+            explanation = raw.get("explanation", "Backtrack: divergence from correct answer")
+
+            # Update the identified step
+            for se in result.step_evaluations:
+                if se.step_index == error_step:
+                    se.verdict = StepVerdict.INVALID
+                    se.error_type = error_type
+                    se.explanation = f"[Backtrack] {explanation}"
+                    se.confidence = 0.8
+                    break
+
+            # Recalculate aggregates
+            result.num_invalid = sum(
+                1 for se in result.step_evaluations
+                if se.verdict == StepVerdict.INVALID
+            )
+            result.first_failure_step = error_step
+            result.error_propagated = True
+
+            logger.debug(
+                f"[{result.task_id}] Backtrack found error at step {error_step}: "
+                f"{error_type}"
+            )
+        except Exception as e:
+            logger.warning(f"[{result.task_id}] Backtrack eval error: {e}")
 
     def _evaluate_step(
         self,

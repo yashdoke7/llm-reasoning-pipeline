@@ -3,6 +3,18 @@
 # Main Configuration
 # ──────────────────────────────────────────────────────────────
 
+# ── Provider ───────────────────────────────────────────────────
+# "groq" = cloud API (rate-limited), "ollama" = local (unlimited, free)
+provider: "groq"
+
+# ── Ollama Settings (only used when provider=ollama) ──────────
+ollama:
+  host: "http://localhost:11434"
+  timeout: 120
+  # When using Ollama, change the model IDs below to Ollama model names:
+  #   eval_models:  llama3.2:3b, qwen2.5:7b, llama3.1:8b, phi3:medium
+  #   evaluator:    qwen2.5:7b  (good at JSON output)
+
 project:
   name: "llm-reasoning-eval"
   version: "1.0.0"
@@ -102,7 +114,7 @@ mitigation:
 
 # ── Fine-Tuning Settings ──────────────────────────────────────
 finetune:
-  base_model: "meta-llama/Llama-3.2-3B-Instruct"  # 3B fits easily in 8GB VRAM
+  base_model: "Qwen/Qwen2.5-3B-Instruct"  # 3B fits easily in 8GB VRAM, no license gate
   # Alternative if you want 8B: "meta-llama/Meta-Llama-3-8B-Instruct" (needs 4-bit loading)
 
   output_dir: "outputs/finetuned_model"

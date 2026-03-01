@@ -56,10 +56,9 @@ def train(cfg: dict, dry_run: bool = False) -> None:
         AutoModelForCausalLM,
         AutoTokenizer,
         BitsAndBytesConfig,
-        TrainingArguments,
     )
     from peft import LoraConfig, get_peft_model, TaskType, prepare_model_for_kbit_training
-    from trl import SFTTrainer
+    from trl import SFTTrainer, SFTConfig
     from datasets import Dataset
 
     ft_cfg = cfg["finetune"]
@@ -162,41 +161,40 @@ def train(cfg: dict, dry_run: bool = False) -> None:
     model.print_trainable_parameters()
 
     # ── Training arguments ────────────────────────────────────
-    training_args = TrainingArguments(
+    training_args = SFTConfig(
         output_dir=output_dir,
         num_train_epochs=train_cfg["num_epochs"],
         per_device_train_batch_size=train_cfg["per_device_train_batch_size"],
         gradient_accumulation_steps=train_cfg["gradient_accumulation_steps"],
         learning_rate=train_cfg["learning_rate"],
-        warmup_ratio=train_cfg["warmup_ratio"],
+        warmup_steps=10,
         lr_scheduler_type=train_cfg["lr_scheduler_type"],
         logging_steps=train_cfg["logging_steps"],
         save_steps=train_cfg["save_steps"],
         eval_steps=train_cfg["eval_steps"],
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         save_total_limit=3,
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         fp16=train_cfg["fp16"],
         bf16=train_cfg["bf16"],
         gradient_checkpointing=True,           # saves VRAM at cost of speed
-        report_to="wandb" if os.environ.get("WANDB_API_KEY") else "none",
+        report_to="none",
         run_name=f"lora-{base_model_id.split('/')[-1]}",
         dataloader_num_workers=0,              # set 0 on Windows; increase on Linux
         remove_unused_columns=False,
+        dataset_text_field="text",
+        max_length=train_cfg["max_seq_length"],
+        packing=False,
     )
 
     # ── Trainer ───────────────────────────────────────────────
     trainer = SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
-        dataset_text_field="text",             # uses the "text" key from JSONL
-        max_seq_length=train_cfg["max_seq_length"],
-        peft_config=peft_config,
         args=training_args,
-        packing=False,                         # packing=True is faster but harder to debug
     )
 
     logger.info("Starting training...")
