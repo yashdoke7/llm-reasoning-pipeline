@@ -17,6 +17,11 @@ pandas>=2.0.0
 # ── Local inference (optional — only needed if provider=ollama) ─
 ollama>=0.4.0
 
+# ── OpenAI (optional — use as judge for objective evaluation) ──
+# pip install openai
+# Add OPENAI_API_KEY to .env
+openai>=1.0.0
+
 # ── Phase 2 — GPU required (install separately) ──────────────
 # Run: pip install -r requirements-finetune.txt
 # torch>=2.3.0

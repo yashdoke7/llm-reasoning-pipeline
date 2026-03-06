@@ -124,24 +124,24 @@ python experiments/run_baseline_eval.py --models qwen2.5:3b --categories multist
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    INFERENCE LAYER                               │
+│                    INFERENCE LAYER                              │
 │  Ollama (Local) ◄──► Groq Cloud API                             │
-│  Qwen 2.5 3B · Llama 3.1 8B · Llama 3.3 70B                   │
+│  Qwen 2.5 3B · Llama 3.1 8B · Llama 3.3 70B                     │
 └───────────────────────────┬─────────────────────────────────────┘
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                   EVALUATION ENGINE                              │
+│                   EVALUATION ENGINE                             │
 │  ┌──────────────┐  ┌────────────────┐  ┌────────────────────┐   │
 │  │ Task         │  │ Step           │  │ Hallucination      │   │
 │  │ Decomposer   │──│ Evaluator      │──│ Scorer + Drift     │   │
 │  │              │  │ (per-step)     │  │ Detector           │   │
 │  └──────────────┘  └───────┬────────┘  └────────────────────┘   │
-│                            │                                     │
-│                     ┌──────▼──────┐                              │
-│                     │ Metrics     │                              │
-│                     │ Aggregator  │                              │
-│                     └──────┬──────┘                              │
+│                            │                                    │
+│                     ┌──────▼──────┐                             │
+│                     │ Metrics     │                             │
+│                     │ Aggregator  │                             │
+│                     └──────┬──────┘                             │
 └────────────────────────────┼────────────────────────────────────┘
                              │
                 ┌────────────┼────────────┐

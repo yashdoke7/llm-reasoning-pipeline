@@ -271,10 +271,17 @@ def main() -> None:
     parser.add_argument("--no-wandb", action="store_true", help="Disable W&B logging")
     parser.add_argument("--no-mitigation", action="store_true", help="Skip mitigation runs")
     parser.add_argument("--output", default=None, help="Override output JSON path")
-    parser.add_argument("--provider", choices=["groq", "ollama"], default=None,
-                        help="LLM provider: groq (cloud) or ollama (local)")
+    parser.add_argument("--provider", choices=["groq", "ollama", "openai"], default=None,
+                        help="LLM provider for SOLVER: groq | ollama | openai")
     parser.add_argument("--evaluator", default=None,
-                        help="Override evaluator model (e.g. qwen2.5:3b for Ollama)")
+                        help="Override evaluator model ID (solver's model used if not set)")
+    parser.add_argument("--judge-provider", choices=["groq", "ollama", "openai"], default=None,
+                        help="Separate provider for the JUDGE (step evaluator). "
+                             "E.g. --judge-provider openai --judge-model gpt-4o-mini "
+                             "to use GPT-4o-mini as an independent judge while Ollama solves.")
+    parser.add_argument("--judge-model", default=None,
+                        help="Model ID for the judge (used with --judge-provider). "
+                             "Examples: gpt-4o-mini, gpt-4o, qwen2.5:14b")
     args = parser.parse_args()
 
     # ── Load config ───────────────────────────────────────────
@@ -297,35 +304,49 @@ def main() -> None:
     run_mitigation = not args.no_mitigation
     provider = args.provider or cfg.get("provider", "groq")
 
+    # Judge provider — separate from solver provider if specified
+    judge_provider = args.judge_provider or provider
+    judge_model_override = args.judge_model
+
     logger.info("=" * 60)
     logger.info("LLM REASONING EVALUATION — PHASE 1 BASELINE")
     logger.info(f"  Models:     {models}")
     logger.info(f"  Categories: {categories}")
     logger.info(f"  Samples:    {cfg['eval']['samples_per_category']}")
     logger.info(f"  Mitigation: {run_mitigation}")
-    logger.info(f"  Provider:   {provider}")
+    logger.info(f"  Solver:     {provider}")
+    logger.info(f"  Judge:      {judge_provider}" + (f" ({judge_model_override})" if judge_model_override else ""))
     logger.info("=" * 60)
 
     # ── Init components ───────────────────────────────────────
     client = get_client(cfg, provider=provider)
     decomposer = TaskDecomposer()
 
-    # When using Ollama, use the first --models entry as evaluator if not specified
-    evaluator_model = args.evaluator or cfg["models"]["evaluator_model"]
-    if provider == "ollama" and not args.evaluator:
-        evaluator_model = models[0]
-        logger.info(f"  Ollama mode: using '{evaluator_model}' as evaluator model")
+    # Determine evaluator model and client
+    # --judge-provider openai --judge-model gpt-4o-mini  → GPT-4o as independent judge
+    # --judge-provider ollama --judge-model qwen2.5:14b  → Qwen 14B as local judge
+    # (default) same as solver                           → original behaviour
+    if judge_model_override:
+        judge_client = get_client(cfg, provider=judge_provider)
+        evaluator_model = judge_model_override
+        logger.info(f"  Independent judge: {judge_provider}/{evaluator_model}")
+    else:
+        judge_client = client
+        evaluator_model = args.evaluator or cfg["models"]["evaluator_model"]
+        if provider == "ollama" and not args.evaluator:
+            evaluator_model = models[0]
+            logger.info(f"  Ollama mode: using '{evaluator_model}' as evaluator model")
 
     step_evaluator = StepEvaluator(
-        client=client,
+        client=judge_client,
         evaluator_model=evaluator_model,
     )
     hall_scorer = HallucinationScorer(
-        client=client,
+        client=judge_client,
         model=evaluator_model,
     )
     drift_detector = DriftDetector(
-        client=client,
+        client=judge_client,
         model=evaluator_model,
     )
     retriever = WikipediaRetriever(
