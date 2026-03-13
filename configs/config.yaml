@@ -53,7 +53,7 @@ models:
       display_name: "Llama-4-Scout"
       provider: "groq"
 
-  evaluator_model: "llama-3.1-8b-instant"
+  evaluator_model: "llama-3.3-70b-versatile"   # judge model — 70B, free via Groq
   trace_gen_model: "llama-3.3-70b-versatile"
 
 # ── Groq API Settings ─────────────────────────────────────────
