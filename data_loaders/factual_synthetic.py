@@ -222,22 +222,61 @@ def load_factual_synthetic(
     """
     Load factual consistency tasks.
 
+    Priority:
+      1. Generated JSONL (from data_loaders/generate_eval_datasets.py) — best option
+      2. JSON cache file if it exists at cache_path
+      3. Built-in hardcoded fact sets (8 topics) — last resort
+
     Args:
-        cache_path:  Where to save/load the JSON cache
+        cache_path:  Path to JSON or JSONL dataset file
         max_samples: Limit to N samples
-        use_cache:   If True, load from cache if available
+        use_cache:   If True, load from file if available
 
     Returns:
         List of FactualSample
     """
     resolved = cache_path or _CACHE_PATH
 
+    # Check for generated JSONL first
+    generated_path = os.path.join(_HERE, "data", "generated_factual.jsonl")
+    if use_cache and os.path.exists(generated_path):
+        logger.info(f"Loading generated factual tasks from {generated_path}")
+        return _load_jsonl(generated_path, max_samples)
+
     if use_cache and os.path.exists(resolved):
-        logger.info(f"Loading factual tasks from cache: {resolved}")
+        logger.info(f"Loading factual tasks from: {resolved}")
+        if resolved.endswith(".jsonl"):
+            return _load_jsonl(resolved, max_samples)
         return _load_cache(resolved, max_samples)
 
+    logger.warning(
+        "No factual dataset found. Using built-in hardcoded tasks (8 topics only). "
+        "Generate more: python data_loaders/generate_eval_datasets.py --categories factual_consistency"
+    )
     samples = _build_samples(max_samples)
-    _save_cache(samples, resolved)
+    _save_cache(samples, resolved if not resolved.endswith(".jsonl") else resolved.replace(".jsonl", ".json"))
+    return samples
+
+
+def _load_jsonl(path: str, max_samples: Optional[int]) -> list[FactualSample]:
+    """Load generated JSONL factual dataset."""
+    samples = []
+    with open(path, encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            if max_samples and len(samples) >= max_samples:
+                break
+            try:
+                row = json.loads(line.strip())
+                samples.append(FactualSample(
+                    id=row.get("id", f"factual_gen_{i:04d}"),
+                    context=row["context"],
+                    questions=row["questions"],
+                    answers=row["answers"],
+                    topic=row.get("topic", "generated"),
+                ))
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.debug(f"Skipping malformed line {i}: {e}")
+    logger.info(f"Loaded {len(samples)} factual samples from JSONL")
     return samples
 
 

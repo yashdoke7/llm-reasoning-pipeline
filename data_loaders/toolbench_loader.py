@@ -145,11 +145,13 @@ def load_toolbench(
     """
     Load tool-use planning samples.
 
-    If a custom JSON file exists at the path, it is used.
-    Otherwise, returns the built-in synthetic task set.
+    Priority:
+      1. Generated JSONL (from data_loaders/generate_eval_datasets.py) — best option
+      2. Custom JSON file if it exists at the configured path
+      3. Built-in synthetic tasks (8 hardcoded) — last resort
 
     Args:
-        path:        Optional path to custom JSON (datasets/data/toolbench_subset.json)
+        path:        Path to dataset file (.jsonl or .json)
         max_samples: Limit to N samples
 
     Returns:
@@ -158,19 +160,55 @@ def load_toolbench(
     resolved = path or _CUSTOM_PATH
 
     if os.path.exists(resolved):
-        logger.info(f"Loading ToolBench tasks from {resolved}")
+        logger.info(f"Loading tool-use tasks from {resolved}")
         return _load_from_file(resolved, max_samples)
 
-    logger.info("Using built-in synthetic tool-use tasks")
+    # Check for generated JSONL in default location
+    generated_path = os.path.join(_HERE, "data", "generated_tooluse.jsonl")
+    if os.path.exists(generated_path):
+        logger.info(f"Loading generated tool-use tasks from {generated_path}")
+        return _load_from_file(generated_path, max_samples)
+
+    logger.warning(
+        "No tool-use dataset found. Using built-in synthetic tasks (8 samples only). "
+        "Generate more: python data_loaders/generate_eval_datasets.py --categories tool_use_planning"
+    )
     return _build_synthetic(max_samples)
 
 
 def _load_from_file(path: str, max_samples: Optional[int]) -> list[ToolSample]:
+    samples = []
+    # JSONL format (generated)
+    if path.endswith(".jsonl"):
+        with open(path, encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                if max_samples and len(samples) >= max_samples:
+                    break
+                try:
+                    row = json.loads(line.strip())
+                    tools = row.get("available_tools", [])
+                    if not tools:
+                        tools = [
+                            _TOOL_REGISTRY.get(t, {"name": t, "description": t, "params": []})
+                            for t in row.get("tools", [])
+                        ]
+                    samples.append(ToolSample(
+                        id=row.get("id", f"tool_gen_{i:04d}"),
+                        goal=row["goal"],
+                        available_tools=tools,
+                        correct_plan=row.get("correct_plan", row.get("correct_steps", [])),
+                        constraints=row.get("constraints", []),
+                    ))
+                except (json.JSONDecodeError, KeyError) as e:
+                    logger.debug(f"Skipping malformed line {i}: {e}")
+        logger.info(f"Loaded {len(samples)} tool-use tasks from JSONL")
+        return samples
+
+    # JSON array format
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     if max_samples:
         data = data[:max_samples]
-    samples = []
     for i, row in enumerate(data):
         tools = [_TOOL_REGISTRY.get(t, {"name": t, "description": t, "params": []}) for t in row.get("tools", [])]
         samples.append(

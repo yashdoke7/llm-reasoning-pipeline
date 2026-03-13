@@ -92,7 +92,17 @@ def _is_correct_trace(
     ground_truth: str,
     category: str,
 ) -> bool:
-    """Quick correctness check before adding to training set."""
+    """
+    Quick correctness check before adding to training set.
+
+    For arithmetic: strict numeric comparison (objective).
+    For non-arithmetic: content word overlap fallback.
+
+    Note: this is NOT the same as evaluation-time checking — here we're
+    filtering training data, so recall matters more than precision.
+    A slightly lenient filter is acceptable because we're generating
+    traces with a strong model that is usually correct.
+    """
     if not ground_truth:
         return True  # no ground truth — include anyway
     _, final_answer = parse_reasoning_trace(raw_response)
@@ -102,21 +112,43 @@ def _is_correct_trace(
     import re
     pred = final_answer.strip().lower()
     truth = ground_truth.strip().lower()
+
     if pred == truth:
         return True
 
-    pred_nums = re.findall(r"-?\d+(?:\.\d+)?", pred)
-    truth_nums = re.findall(r"-?\d+(?:\.\d+)?", truth)
-    if pred_nums and truth_nums:
-        try:
-            return abs(float(pred_nums[-1]) - float(truth_nums[-1])) < 1e-6
-        except ValueError:
-            pass
+    # Arithmetic: strict numeric check
+    if category == "multistep_arithmetic":
+        pred_nums = re.findall(r"-?\d+(?:\.\d+)?", pred)
+        truth_nums = re.findall(r"-?\d+(?:\.\d+)?", truth)
+        if pred_nums and truth_nums:
+            try:
+                return abs(float(pred_nums[-1]) - float(truth_nums[-1])) < 1e-6
+            except ValueError:
+                pass
+        return False
 
+    # Factual: content word overlap (lower bar for training data recall)
     if category == "factual_consistency":
         truth_words = set(truth.split())
         pred_words = set(pred.split())
-        if truth_words and len(truth_words & pred_words) / len(truth_words) > 0.5:
+        if truth_words and len(truth_words & pred_words) / len(truth_words) > 0.45:
+            return True
+
+    # Tool-use: check tool names appear
+    if category == "tool_use_planning":
+        tool_names = re.findall(r"(?:call\s+)?(\w+)\s+with", truth, re.I)
+        if tool_names:
+            matched = sum(1 for t in tool_names if t.lower() in pred)
+            return matched / len(tool_names) >= 0.5
+
+    # Counterfactual: content word overlap
+    if category == "causal_counterfactual":
+        stop = {'the', 'a', 'an', 'is', 'was', 'were', 'would', 'have', 'has',
+                'had', 'been', 'be', 'to', 'of', 'and', 'in', 'that', 'it',
+                'not', 'this', 'if', 'then', 'so', 'but', 'or', 'for', 'with'}
+        truth_content = set(re.findall(r'\w+', truth)) - stop
+        pred_content = set(re.findall(r'\w+', pred)) - stop
+        if truth_content and len(truth_content & pred_content) / len(truth_content) > 0.4:
             return True
 
     return False
@@ -220,8 +252,8 @@ def main() -> None:
     parser.add_argument("--category", default=None, help="Override target category")
     parser.add_argument("--samples", type=int, default=None, help="Target training examples")
     parser.add_argument("--output", default=None, help="Output JSONL path")
-    parser.add_argument("--provider", choices=["groq", "ollama"], default="ollama",
-                        help="LLM provider for trace generation")
+    parser.add_argument("--provider", choices=["groq", "ollama", "openai"], default="ollama",
+                        help="LLM provider for trace generation. openai=GPT-4.1/GPT-5.3 (best quality)")
     parser.add_argument("--trace-model", default=None,
                         help="Model for generating traces (e.g. qwen2.5:7b)")
     args = parser.parse_args()

@@ -94,26 +94,42 @@ datasets:
     cache_dir: "data_loaders/data/gsm8k_cache"
 
   crass:
-    # Download from: https://github.com/apergo-ai/CRASS
-    # Place file at: data_loaders/data/crass_dataset.csv
-    path: "data_loaders/data/crass_dataset.csv"
-    max_samples: 50
+    # Option A — Generated (recommended): run data_loaders/generate_eval_datasets.py
+    #   python data_loaders/generate_eval_datasets.py --categories causal_counterfactual --samples 60
+    # Option B — Real CRASS: download from https://github.com/apergo-ai/CRASS
+    #   Place file at data_loaders/data/crass_dataset.csv
+    path: "data_loaders/data/generated_counterfactual.jsonl"
+    max_samples: 60
 
   toolbench:
-    # Synthetic tool-use tasks (auto-generated — no download needed)
-    path: "data_loaders/data/toolbench_synthetic.json"
-    max_samples: 50
+    # Option A — Generated (recommended): run data_loaders/generate_eval_datasets.py
+    #   python data_loaders/generate_eval_datasets.py --categories tool_use_planning --samples 60
+    # Option B — Hardcoded fallback (8 tasks only) — auto-used if file not found
+    path: "data_loaders/data/generated_tooluse.jsonl"
+    max_samples: 60
 
   factual_synthetic:
-    # Auto-generated from Wikipedia topics
-    path: "data_loaders/data/factual_synthetic.json"
-    max_samples: 50
+    # Option A — Generated (recommended): run data_loaders/generate_eval_datasets.py
+    #   python data_loaders/generate_eval_datasets.py --categories factual_consistency --samples 60
+    # Option B — Hardcoded fallback (8 tasks only) — auto-used if file not found
+    path: "data_loaders/data/generated_factual.jsonl"
+    max_samples: 60
     topics:
       - "climate_change"
       - "machine_learning"
       - "world_war_ii"
       - "quantum_computing"
       - "space_exploration"
+
+# ── Dataset Generation Settings ───────────────────────────────
+# Run: python data_loaders/generate_eval_datasets.py
+# to create larger, diverse test sets for non-arithmetic categories.
+# Recommended: --provider ollama --model qwen2.5:7b (free, local)
+# Best quality: --provider openai --model gpt-4.1 (requires OPENAI_API_KEY)
+dataset_generation:
+  default_provider: "ollama"
+  default_model: "qwen2.5:7b"
+  samples_per_category: 60
 
 # ── Mitigation Settings ───────────────────────────────────────
 mitigation:

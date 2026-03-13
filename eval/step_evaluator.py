@@ -126,14 +126,46 @@ def _build_step_eval_prompt(
 
 # ── Final answer checker ──────────────────────────────────────
 
+_ANSWER_JUDGE_SYSTEM = """You are an answer correctness evaluator.
+
+Given a ground truth answer and a model's predicted answer, determine if they are semantically equivalent — meaning they convey the same factual content, even if worded differently.
+
+Respond ONLY with valid JSON:
+{
+  "correct": true | false,
+  "reasoning": "<one sentence explaining your decision>"
+}
+
+Rules:
+- "correct" = true if the prediction contains the key facts from the ground truth
+- Minor wording differences, synonyms, or extra context = still correct
+- Missing key facts, wrong numbers/names/dates, contradictory statements = incorrect
+- Do NOT penalize for additional correct information"""
+
+
 def _check_answer_correctness(
     predicted: str,
     ground_truth: str,
     category: str,
+    judge_client=None,
+    judge_model: str = None,
 ) -> Optional[bool]:
     """
-    Heuristic final answer comparison.
-    Returns True/False/None (None = cannot determine).
+    Final answer comparison.
+
+    For arithmetic: numeric comparison (objective, no LLM needed).
+    For other categories: tries string heuristics first, then falls back
+    to LLM-based semantic checking if a judge client is provided.
+
+    Args:
+        predicted:    Model's final answer string
+        ground_truth: Reference answer
+        category:     Task category (determines checking strategy)
+        judge_client: Optional LLM client for semantic checking fallback
+        judge_model:  Model to use for semantic checking
+
+    Returns:
+        True / False / None (None = cannot determine)
     """
     if not predicted or not ground_truth:
         return None
@@ -141,46 +173,72 @@ def _check_answer_correctness(
     pred = predicted.strip().lower()
     truth = ground_truth.strip().lower()
 
-    # Exact match
+    # Exact match — always works
     if pred == truth:
         return True
 
-    # Numeric match (strip commas, spaces, units)
     import re
+
     def extract_numbers(s: str) -> list[str]:
         return re.findall(r"-?\d+(?:\.\d+)?", s)
 
-    pred_nums = extract_numbers(pred)
-    truth_nums = extract_numbers(truth)
-    if pred_nums and truth_nums:
-        try:
-            if abs(float(pred_nums[-1]) - float(truth_nums[-1])) < 1e-6:
-                return True
-        except ValueError:
-            pass
+    # ── Arithmetic: numeric match (objective, trust this completely) ──
+    if category == "multistep_arithmetic":
+        pred_nums = extract_numbers(pred)
+        truth_nums = extract_numbers(truth)
+        if pred_nums and truth_nums:
+            try:
+                if abs(float(pred_nums[-1]) - float(truth_nums[-1])) < 1e-6:
+                    return True
+            except ValueError:
+                pass
+        return False  # for arithmetic, if number doesn't match → wrong
 
-    # Substring match for long factual answers
+    # ── Non-arithmetic: try heuristics, then LLM fallback ────────────
+
+    # Fast heuristic checks first (no API call)
+    heuristic_result = _heuristic_check(pred, truth, category)
+    if heuristic_result is True:
+        return True  # confident enough to accept
+
+    # If judge available, use it for semantic verification
+    # (critical for non-arithmetic where wording varies significantly)
+    if judge_client and judge_model:
+        return _llm_answer_check(predicted, ground_truth, category, judge_client, judge_model)
+
+    # No judge available — fall back to heuristic result (may be None or False)
+    return heuristic_result
+
+
+def _heuristic_check(pred: str, truth: str, category: str) -> Optional[bool]:
+    """Fast string-based checks. Returns True (confident match), False (confident mismatch), or None (uncertain)."""
+    import re
+
     if category == "factual_consistency":
+        # 60% content word overlap — reasonable for short factual answers
         truth_words = set(truth.split())
         pred_words = set(pred.split())
         overlap = truth_words & pred_words
         if truth_words and len(overlap) / len(truth_words) > 0.6:
             return True
+        if truth_words and len(overlap) / len(truth_words) < 0.1:
+            return False
+        return None  # uncertain — let LLM decide
 
-    # Tool-use: match tool names from ground truth plan against generated steps
     if category == "tool_use_planning":
+        # Check tool names appear in predicted steps
         truth_tools = re.findall(r"(?:call\s+)?(\w+)\s+with", truth, re.I)
         if truth_tools:
             matched = sum(1 for t in truth_tools if t.lower() in pred)
-            return matched / len(truth_tools) >= 0.5
-        # Fallback: check if key words from truth appear in pred
-        truth_keywords = [w for w in truth.split() if len(w) > 4]
-        if truth_keywords:
-            matched = sum(1 for w in truth_keywords if w in pred)
-            return matched / len(truth_keywords) >= 0.3
+            ratio = matched / len(truth_tools)
+            if ratio >= 0.7:
+                return True
+            if ratio < 0.3:
+                return False
+        return None
 
-    # Counterfactual: keyword overlap (stricter than factual)
     if category == "causal_counterfactual":
+        # Content word overlap (stricter — counterfactuals need key concepts)
         stop = {'the', 'a', 'an', 'is', 'was', 'were', 'would', 'have', 'has',
                 'had', 'been', 'be', 'to', 'of', 'and', 'in', 'that', 'it',
                 'not', 'this', 'if', 'then', 'so', 'but', 'or', 'for', 'with'}
@@ -188,10 +246,46 @@ def _check_answer_correctness(
         pred_content = set(re.findall(r'\w+', pred)) - stop
         if truth_content:
             overlap = len(truth_content & pred_content) / len(truth_content)
-            if overlap >= 0.5:
+            if overlap >= 0.6:
                 return True
+            if overlap < 0.15:
+                return False
+        return None
 
-    return False
+    return None
+
+
+def _llm_answer_check(
+    predicted: str,
+    ground_truth: str,
+    category: str,
+    client,
+    model: str,
+) -> Optional[bool]:
+    """
+    Use a judge LLM to semantically verify answer correctness.
+    This eliminates false negatives from keyword mismatch and false positives
+    from coincidental word overlap.
+    """
+    try:
+        prompt = (
+            f"Category: {category}\n\n"
+            f"Ground truth answer: {ground_truth}\n\n"
+            f"Model's predicted answer: {predicted}\n\n"
+            f"Is the prediction semantically equivalent to the ground truth?"
+        )
+        raw = client.complete_json(
+            model=model,
+            user_prompt=prompt,
+            system_prompt=_ANSWER_JUDGE_SYSTEM,
+            temperature=0.0,
+            max_tokens=150,
+        )
+        return bool(raw.get("correct", False))
+    except Exception as e:
+        logger.warning(f"LLM answer check failed: {e}")
+        return None
+
 
 
 # ── Main evaluator ────────────────────────────────────────────
@@ -212,12 +306,18 @@ class StepEvaluator:
         temperature: float = 0.05,
         max_tokens: int = 512,
         skip_single_step: bool = False,
+        judge_client=None,
+        judge_model: str = None,
     ) -> None:
         self._client = client
         self._model = evaluator_model
         self._temperature = temperature
         self._max_tokens = max_tokens
         self._skip_single_step = skip_single_step
+        # Separate judge for answer verification (eliminates self-grading bias)
+        # If None, falls back to heuristic string matching
+        self._judge_client = judge_client
+        self._judge_model = judge_model
 
     def evaluate(
         self,
@@ -299,7 +399,11 @@ class StepEvaluator:
         else:
             predicted_for_match = task.final_answer
         result.final_answer_correct = _check_answer_correctness(
-            predicted_for_match, task.ground_truth, task.category
+            predicted_for_match,
+            task.ground_truth,
+            task.category,
+            judge_client=self._judge_client,
+            judge_model=self._judge_model,
         )
 
         # Error propagation: step failed AND final answer wrong

@@ -340,6 +340,9 @@ def main() -> None:
     step_evaluator = StepEvaluator(
         client=judge_client,
         evaluator_model=evaluator_model,
+        # Pass separate judge for answer verification (eliminates self-grading for non-arithmetic)
+        judge_client=judge_client if judge_model_override else None,
+        judge_model=evaluator_model if judge_model_override else None,
     )
     hall_scorer = HallucinationScorer(
         client=judge_client,

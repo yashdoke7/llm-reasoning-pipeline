@@ -111,11 +111,13 @@ def load_crass(
     """
     Load CRASS counterfactual reasoning samples.
 
-    If the CSV file is not found, returns a synthetic set of 10 samples
-    so the pipeline can run without the download.
+    Priority:
+      1. Generated JSONL (from data_loaders/generate_eval_datasets.py) — best option
+      2. Real CRASS CSV (download from https://github.com/apergo-ai/CRASS)
+      3. Synthetic fallback (10 hardcoded samples) — last resort
 
     Args:
-        path:        Path to crass_dataset.csv (uses default location if None)
+        path:        Path to dataset file (.jsonl or .csv)
         max_samples: Limit to N samples
 
     Returns:
@@ -124,15 +126,47 @@ def load_crass(
     resolved = path or _DEFAULT_PATH
 
     if not os.path.exists(resolved):
+        # Also check for generated JSONL in default location
+        generated_path = os.path.join(_HERE, "data", "generated_counterfactual.jsonl")
+        if os.path.exists(generated_path):
+            logger.info(f"Loading generated counterfactual dataset from {generated_path}")
+            return _load_jsonl(generated_path, max_samples)
         logger.warning(
-            f"CRASS dataset not found at '{resolved}'. "
+            f"Counterfactual dataset not found at '{resolved}'. "
             "Using synthetic fallback (10 samples). "
-            "Download from: https://github.com/apergo-ai/CRASS"
+            "Generate better data: python data_loaders/generate_eval_datasets.py --categories causal_counterfactual"
         )
         return _load_synthetic(max_samples)
 
-    logger.info(f"Loading CRASS from {resolved}")
+    # JSONL format (generated)
+    if resolved.endswith(".jsonl"):
+        logger.info(f"Loading generated counterfactual JSONL from {resolved}")
+        return _load_jsonl(resolved, max_samples)
+
+    logger.info(f"Loading CRASS CSV from {resolved}")
     return _load_csv(resolved, max_samples)
+
+
+def _load_jsonl(path: str, max_samples: Optional[int]) -> list[CRASSSample]:
+    """Load generated JSONL counterfactual dataset."""
+    samples = []
+    with open(path, encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            if max_samples and len(samples) >= max_samples:
+                break
+            try:
+                row = json.loads(line.strip())
+                samples.append(CRASSSample(
+                    id=row.get("id", f"crass_gen_{i:04d}"),
+                    premise=row["premise"],
+                    question=row["question"],
+                    correct_answer=row["correct_answer"],
+                    distractors=row.get("distractors", []),
+                ))
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.debug(f"Skipping malformed line {i}: {e}")
+    logger.info(f"Loaded {len(samples)} counterfactual samples from JSONL")
+    return samples
 
 
 def _load_csv(path: str, max_samples: Optional[int]) -> list[CRASSSample]:
