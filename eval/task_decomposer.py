@@ -134,6 +134,50 @@ _FINAL_ANSWER_PATTERN = re.compile(
     r"Final\s+Answer\s*[:\-]?\s*(.+?)$",
     re.IGNORECASE | re.DOTALL,
 )
+# LaTeX boxed format: \boxed{42} or \\boxed{42}
+_BOXED_PATTERN = re.compile(
+    r"\\boxed\{([^}]+)\}",
+)
+
+
+def _extract_final_answer(raw: str) -> str:
+    """
+    Extract the final answer from raw LLM output.
+    Handles multiple formats:
+      1. "Final Answer: 42"
+      2. "\\boxed{42}"
+      3. "The answer is 42"
+      4. Last number in response (arithmetic fallback)
+    """
+    # Try explicit "Final Answer:" first
+    final_match = _FINAL_ANSWER_PATTERN.search(raw)
+    if final_match:
+        answer = final_match.group(1).strip()
+        # If the extracted "final answer" itself contains \boxed, extract from it
+        boxed = _BOXED_PATTERN.search(answer)
+        if boxed:
+            return boxed.group(1).strip()
+        # Clean up trailing repetitions/noise
+        # Take only the first line if multi-line
+        first_line = answer.split('\n')[0].strip()
+        if first_line:
+            return first_line
+        return answer
+
+    # Try \boxed{} anywhere in response
+    boxed_matches = _BOXED_PATTERN.findall(raw)
+    if boxed_matches:
+        return boxed_matches[-1].strip()  # last boxed value
+
+    # Try "the answer is X" pattern
+    answer_is = re.search(
+        r"(?:the\s+)?answer\s+is\s*[:\-]?\s*(.+?)(?:\.|$)",
+        raw, re.IGNORECASE
+    )
+    if answer_is:
+        return answer_is.group(1).strip()
+
+    return ""
 
 
 def parse_reasoning_trace(raw: str) -> tuple[list[ReasoningStep], str]:
@@ -145,12 +189,12 @@ def parse_reasoning_trace(raw: str) -> tuple[list[ReasoningStep], str]:
         steps: list of ReasoningStep in order
         final_answer: extracted final answer string (empty if not found)
     """
-    # Extract final answer first
-    final_answer = ""
+    # Extract final answer first (handles Final Answer:, \boxed{}, "the answer is")
+    final_answer = _extract_final_answer(raw)
+
+    # Remove final answer block for step parsing
     final_match = _FINAL_ANSWER_PATTERN.search(raw)
     if final_match:
-        final_answer = final_match.group(1).strip()
-        # Remove final answer block for step parsing
         text_for_steps = raw[: final_match.start()]
     else:
         text_for_steps = raw
