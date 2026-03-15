@@ -214,7 +214,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config_path = _ROOT / args.config
-    with open(config_path) as f:
+    with open(config_path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
     logging.basicConfig(
