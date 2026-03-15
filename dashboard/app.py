@@ -1,8 +1,9 @@
 """
 dashboard/app.py
-Streamlit demo application with two modes:
+Streamlit demo application with three modes:
   1. LIVE EVAL: Enter a reasoning problem, pick a model, watch step-by-step evaluation
-  2. RESULTS:   Browse saved evaluation results and charts from W&B
+  2. RESULTS:   Browse + compare saved evaluation results with charts
+  3. ABOUT:     Project description
 
 Run:
     streamlit run dashboard/app.py
@@ -12,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import glob as globlib
 from pathlib import Path
 
 _ROOT = Path(__file__).parent.parent
@@ -34,7 +36,7 @@ st.set_page_config(
 # ── Load config ───────────────────────────────────────────────
 @st.cache_resource
 def load_config():
-    with open(_ROOT / "configs" / "config.yaml") as f:
+    with open(_ROOT / "configs" / "config.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 cfg = load_config()
@@ -42,7 +44,7 @@ cfg = load_config()
 # ── Init components (cached) ──────────────────────────────────
 @st.cache_resource
 def get_components():
-    from models.groq_client import get_client
+    from models import get_client
     from eval.task_decomposer import TaskDecomposer
     from eval.step_evaluator import StepEvaluator
     from eval.hallucination_scorer import HallucinationScorer
@@ -50,10 +52,12 @@ def get_components():
     from mitigation.retriever import WikipediaRetriever
     from mitigation.regrounder import Regrounder, InterventionMode
 
-    if not os.environ.get("GROQ_API_KEY"):
+    provider = cfg.get("provider", "groq")
+    try:
+        client = get_client(cfg, provider=provider)
+    except Exception:
         return None, None, None, None, None, None, None
 
-    client = get_client(cfg)
     decomposer = TaskDecomposer()
     step_evaluator = StepEvaluator(client=client, evaluator_model=cfg["models"]["evaluator_model"])
     hall_scorer = HallucinationScorer(client=client, model=cfg["models"]["evaluator_model"])
@@ -63,7 +67,30 @@ def get_components():
     return client, decomposer, step_evaluator, hall_scorer, drift_detector, retriever, regrounder
 
 
-# ── Styling ───────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────
+
+def load_all_eval_results() -> list[dict]:
+    """Load all eval_results_*.json files from outputs/."""
+    outputs_dir = str(_ROOT / cfg["paths"]["outputs"])
+    files = sorted(globlib.glob(os.path.join(outputs_dir, "eval_results_*.json")))
+    results = []
+    for f in files:
+        try:
+            with open(f, encoding="utf-8") as fh:
+                data = json.load(fh)
+            data["_filename"] = os.path.basename(f)
+            results.append(data)
+        except Exception:
+            pass
+    return results
+
+
+def extract_model_name(filename: str) -> str:
+    """Extract model name from filename like eval_results_qwen2.5-3b_mit_123.json"""
+    name = filename.replace("eval_results_", "").split("_mit_")[0].split("_nomir_")[0]
+    return name
+
+
 VERDICT_COLORS = {"VALID": "#2ECC71", "INVALID": "#E74C3C", "UNCERTAIN": "#F39C12"}
 VERDICT_ICONS = {"VALID": "✅", "INVALID": "❌", "UNCERTAIN": "⚠️"}
 
@@ -98,18 +125,170 @@ st.sidebar.title("🧠 LLM Reasoning Evaluator")
 st.sidebar.markdown("Step-level evaluation of LLM reasoning chains")
 st.sidebar.divider()
 
-mode = st.sidebar.radio("Mode", ["Live Evaluation", "Browse Results", "About"])
+mode = st.sidebar.radio("Mode", ["Results Comparison", "Live Evaluation", "About"])
 
-model_options = {m["display_name"]: m["id"] for m in cfg["models"]["eval_models"]}
-selected_display = st.sidebar.selectbox("Model", list(model_options.keys()))
-selected_model_id = model_options[selected_display]
+# ── Results Comparison (main page) ────────────────────────────
 
-category_options = cfg["eval"]["categories"]
-selected_category = st.sidebar.selectbox("Task Category", category_options)
+if mode == "Results Comparison":
+    st.title("📊 Evaluation Results Comparison")
 
-# ── Main content ──────────────────────────────────────────────
+    all_results = load_all_eval_results()
 
-if mode == "Live Evaluation":
+    if not all_results:
+        st.info("No evaluation results found. Run the evaluation first:\n\n"
+                "```bash\npython experiments/run_baseline_eval.py --provider ollama "
+                "--models qwen2.5:3b --judge-provider groq --samples 20 --no-wandb\n```")
+        st.stop()
+
+    # Let user pick which runs to compare
+    run_options = {}
+    for r in all_results:
+        fname = r["_filename"]
+        model = extract_model_name(fname)
+        label = f"{model} ({fname})"
+        run_options[label] = r
+
+    selected_runs = st.multiselect(
+        "Select runs to compare",
+        list(run_options.keys()),
+        default=list(run_options.keys())[-2:] if len(run_options) >= 2 else list(run_options.keys()),
+    )
+
+    if not selected_runs:
+        st.warning("Select at least one run to view results.")
+        st.stop()
+
+    # ── Overall comparison table ──────────────────────────────
+    st.subheader("Overall Model Comparison")
+
+    import pandas as pd
+
+    rows = []
+    for label in selected_runs:
+        r = run_options[label]
+        for m in r.get("model_summary", []):
+            rows.append({
+                "Model": m["model"],
+                "Tasks": m["total_tasks"],
+                "Accuracy": m["overall_final_accuracy"],
+                "Step Failure": m["overall_step_failure_rate"],
+                "Error Propagation": m["overall_error_propagation_rate"],
+            })
+
+    if rows:
+        df = pd.DataFrame(rows)
+        st.dataframe(
+            df.style.format({
+                "Accuracy": "{:.1%}",
+                "Step Failure": "{:.1%}",
+                "Error Propagation": "{:.1%}",
+            }),
+            use_container_width=True,
+        )
+
+    # ── Per-category comparison ───────────────────────────────
+    st.subheader("Per-Category Breakdown")
+
+    cat_rows = []
+    for label in selected_runs:
+        r = run_options[label]
+        for run_metrics in r.get("per_run_metrics", []):
+            cat_rows.append({
+                "Model": run_metrics["model"],
+                "Category": run_metrics["category"],
+                "Tasks": run_metrics["total_tasks"],
+                "Accuracy": run_metrics["final_accuracy"],
+                "Step Failure": run_metrics["step_failure_rate"],
+                "Invalid Steps": run_metrics["invalid_steps"],
+                "Total Steps": run_metrics["total_steps"],
+                "Hallucination Rate": run_metrics.get("hallucination_rate", 0),
+            })
+
+    if cat_rows:
+        cat_df = pd.DataFrame(cat_rows)
+        st.dataframe(
+            cat_df.style.format({
+                "Accuracy": "{:.1%}",
+                "Step Failure": "{:.1%}",
+                "Hallucination Rate": "{:.1%}",
+            }),
+            use_container_width=True,
+        )
+
+        # ── Charts ────────────────────────────────────────────
+        st.subheader("Visual Comparison")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("**Accuracy by Category**")
+            try:
+                import altair as alt
+                chart_acc = alt.Chart(cat_df).mark_bar().encode(
+                    x=alt.X("Category:N", title="Category"),
+                    y=alt.Y("Accuracy:Q", title="Accuracy", scale=alt.Scale(domain=[0, 1])),
+                    color=alt.Color("Model:N"),
+                    xOffset="Model:N",
+                    tooltip=["Model", "Category", "Accuracy"],
+                ).properties(height=350)
+                st.altair_chart(chart_acc, use_container_width=True)
+            except ImportError:
+                st.bar_chart(cat_df.pivot(index="Category", columns="Model", values="Accuracy"))
+
+        with col2:
+            st.markdown("**Step Failure Rate by Category**")
+            try:
+                import altair as alt
+                chart_sf = alt.Chart(cat_df).mark_bar().encode(
+                    x=alt.X("Category:N", title="Category"),
+                    y=alt.Y("Step Failure:Q", title="Step Failure Rate", scale=alt.Scale(domain=[0, 0.3])),
+                    color=alt.Color("Model:N"),
+                    xOffset="Model:N",
+                    tooltip=["Model", "Category", "Step Failure"],
+                ).properties(height=350)
+                st.altair_chart(chart_sf, use_container_width=True)
+            except ImportError:
+                st.bar_chart(cat_df.pivot(index="Category", columns="Model", values="Step Failure"))
+
+    # ── Step failure distribution ─────────────────────────────
+    st.subheader("Step Failure Distribution (by step index)")
+    for label in selected_runs:
+        r = run_options[label]
+        breakdown = r.get("step_failure_breakdown", {})
+        if breakdown:
+            model_name = r.get("model_summary", [{}])[0].get("model", label)
+            st.markdown(f"**{model_name}**")
+            try:
+                import altair as alt
+                bf_df = pd.DataFrame([
+                    {"Step Index": int(k), "Failure Rate": v["failure_rate"]}
+                    for k, v in breakdown.items()
+                ])
+                chart = alt.Chart(bf_df).mark_bar(color="#E74C3C").encode(
+                    x=alt.X("Step Index:O", title="Step Index"),
+                    y=alt.Y("Failure Rate:Q", title="Failure Rate", scale=alt.Scale(domain=[0, 0.5])),
+                    tooltip=["Step Index", "Failure Rate"],
+                ).properties(height=250)
+                st.altair_chart(chart, use_container_width=True)
+            except ImportError:
+                st.json(breakdown)
+
+    # ── Fine-tuning recommendation ────────────────────────────
+    st.subheader("Fine-Tuning Recommendation")
+    for label in selected_runs:
+        r = run_options[label]
+        fr = r.get("failure_report", {})
+        if fr.get("finetune_target_category"):
+            model_name = fr.get("finetune_target_model", "")
+            st.success(f"**{model_name}** → Target: **{fr['finetune_target_category']}**")
+
+    # ── Raw JSON explorer ─────────────────────────────────────
+    with st.expander("📄 Raw JSON Explorer"):
+        selected_raw = st.selectbox("Select run", selected_runs)
+        st.json(run_options[selected_raw], expanded=False)
+
+
+elif mode == "Live Evaluation":
     st.title("Live Step-Level Reasoning Evaluation")
     st.markdown(
         "Enter a reasoning problem below. The system will generate a chain-of-thought "
@@ -117,15 +296,17 @@ if mode == "Live Evaluation":
         "and consistency."
     )
 
-    # Check API key
-    if not os.environ.get("GROQ_API_KEY"):
-        st.error(
-            "GROQ_API_KEY not set. Run:\n```\nexport GROQ_API_KEY=your_key\n"
-            "streamlit run dashboard/app.py\n```"
-        )
-        st.stop()
+    model_options = {m["display_name"]: m["id"] for m in cfg["models"]["eval_models"]}
+    selected_display = st.sidebar.selectbox("Model", list(model_options.keys()))
+    selected_model_id = model_options[selected_display]
+    category_options = cfg["eval"]["categories"]
+    selected_category = st.sidebar.selectbox("Task Category", category_options)
 
     client, decomposer, step_evaluator, hall_scorer, drift_detector, retriever, regrounder = get_components()
+
+    if client is None:
+        st.error("No LLM provider available. Set GROQ_API_KEY in .env or ensure Ollama is running.")
+        st.stop()
 
     # Example problems
     EXAMPLES = {
@@ -153,7 +334,6 @@ if mode == "Live Evaluation":
         from mitigation.regrounder import InterventionMode
 
         with st.spinner(f"Generating reasoning trace with {selected_display}..."):
-            # Build category-specific kwargs (avoid passing None to formatters)
             task_fields = {}
             if selected_category == "multistep_arithmetic":
                 task_fields = {"question": problem_input.strip()}
@@ -184,21 +364,18 @@ if mode == "Live Evaluation":
 
         st.success(f"Generated {len(decomposed.steps)} reasoning steps")
 
-        # Show raw response in expander
         with st.expander("Raw LLM Response"):
             st.text(decomposed.raw_response)
 
-        # Evaluate steps
         with st.spinner("Evaluating each step..."):
             task_eval = step_evaluator.evaluate(decomposed, model_name=selected_display)
             hall_scores = hall_scorer.score_steps("demo", decomposed.steps, decomposed.prompt[:400])
             drift_result = drift_detector.detect("demo", decomposed.prompt, decomposed.steps, selected_category)
 
-        # ── Results display ───────────────────────────────────
         st.divider()
         col_a, col_b, col_c, col_d = st.columns(4)
         col_a.metric("Total Steps", task_eval.num_steps)
-        col_b.metric("Invalid Steps", task_eval.num_invalid, delta=None)
+        col_b.metric("Invalid Steps", task_eval.num_invalid)
         col_c.metric("Error Propagated", "Yes" if task_eval.error_propagated else "No")
         col_d.metric("Drift Detected", "Yes" if drift_result.has_drift else "No")
 
@@ -207,39 +384,30 @@ if mode == "Live Evaluation":
         for se_dict in eval_dicts["step_evaluations"]:
             render_step_card(se_dict)
 
-        # Final answer
         st.markdown("### Final Answer")
         fa_color = "#2ECC71" if task_eval.final_answer_correct else "#E74C3C" if task_eval.final_answer_correct is False else "#888"
         st.markdown(
             f"<div style='border: 2px solid {fa_color}; border-radius: 8px; padding: 12px;'>"
-            f"<b>{decomposed.final_answer}</b>"
-            f"</div>",
+            f"<b>{decomposed.final_answer}</b></div>",
             unsafe_allow_html=True,
         )
 
-        # Hallucination summary
         hall_summary = hall_scorer.aggregate(hall_scores)
         if hall_summary["flagged_steps"] > 0:
-            st.warning(
-                f"⚠️ {hall_summary['flagged_steps']} step(s) flagged for potential hallucination. "
-                f"Hallucination rate: {hall_summary['hallucination_rate']:.1%}"
-            )
+            st.warning(f"⚠️ {hall_summary['flagged_steps']} step(s) flagged for potential hallucination. "
+                       f"Rate: {hall_summary['hallucination_rate']:.1%}")
 
-        # Drift
         if drift_result.has_drift:
             st.warning(f"⚠️ Reasoning drift detected: {drift_result.drift_explanation}")
 
-        # Mitigation
         if run_mitigation and (task_eval.num_invalid > 0 or hall_summary["flagged_steps"] > 0):
             st.divider()
             st.markdown("### RAG Re-Grounding")
             suspicious = [c for s in hall_scores for c in s.suspicious_claims]
             with st.spinner("Retrieving context and re-grounding..."):
                 rg = regrounder.reground(
-                    task=decomposed,
-                    model=selected_model_id,
-                    suspicious_claims=suspicious,
-                    mode=InterventionMode.FULL,
+                    task=decomposed, model=selected_model_id,
+                    suspicious_claims=suspicious, mode=InterventionMode.FULL,
                 )
             if rg.success:
                 col1, col2 = st.columns(2)
@@ -247,88 +415,31 @@ if mode == "Live Evaluation":
                 col1.info(rg.original_final_answer)
                 col2.markdown("**Re-grounded Answer**")
                 col2.success(rg.regrounded_answer)
-                if rg.retrieved_docs:
-                    with st.expander(f"Retrieved {len(rg.retrieved_docs)} Wikipedia sources"):
-                        for doc in rg.retrieved_docs:
-                            st.markdown(f"**{doc.title}**")
-                            st.text(doc.content[:500])
-
-
-elif mode == "Browse Results":
-    st.title("Evaluation Results Browser")
-    results_path = os.path.join(str(_ROOT), cfg["paths"]["outputs"], "eval_results.json")
-
-    if not os.path.exists(results_path):
-        st.info("No evaluation results found. Run `python experiments/run_baseline_eval.py` first.")
-    else:
-        with open(results_path) as f:
-            results = json.load(f)
-
-        st.json(results, expanded=False)
-
-        # Model summary table
-        if "model_summary" in results:
-            st.subheader("Model Comparison")
-            import pandas as pd
-            rows = []
-            for m in results["model_summary"]:
-                rows.append({
-                    "Model": m["model"],
-                    "Step Failure Rate": f"{m['overall_step_failure_rate']:.3f}",
-                    "Final Accuracy": f"{m['overall_final_accuracy']:.3f}",
-                    "Error Propagation": f"{m['overall_error_propagation_rate']:.3f}",
-                })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
-
-        # Step failure breakdown
-        if "step_failure_breakdown" in results:
-            st.subheader("Step Failure Distribution")
-            breakdown = results["step_failure_breakdown"]
-            try:
-                import pandas as pd
-                import altair as alt
-                df = pd.DataFrame([
-                    {"Step Index": int(k), "Failure Rate": v["failure_rate"]}
-                    for k, v in breakdown.items()
-                ])
-                chart = alt.Chart(df).mark_bar(color="#E74C3C").encode(
-                    x=alt.X("Step Index:O", title="Step Index"),
-                    y=alt.Y("Failure Rate:Q", title="Failure Rate", scale=alt.Scale(domain=[0, 1])),
-                    tooltip=["Step Index", "Failure Rate"],
-                ).properties(width=700, height=300)
-                st.altair_chart(chart, use_container_width=True)
-            except ImportError:
-                st.json(breakdown)
-
-        # Failure report
-        if "failure_report" in results:
-            st.subheader("Fine-Tuning Target")
-            fr = results["failure_report"]
-            st.success(f"Recommended fine-tuning target: **{fr.get('finetune_target_category')}**")
-            if fr.get("worst_performing"):
-                import pandas as pd
-                st.dataframe(pd.DataFrame(fr["worst_performing"]), use_container_width=True)
 
 
 else:  # About
     st.title("About This Project")
     st.markdown("""
-## LLM Reasoning Evaluation + LoRA Fine-Tuning Pipeline
+## LLM Reasoning Evaluation & Fine-Tuning Pipeline
 
 **What this does:**
 - Evaluates LLM reasoning at the **step level**, not just final answer
-- Identifies **where** and **why** reasoning fails across 4 task categories
-- Uses failure analysis to guide **targeted LoRA fine-tuning**
-- Benchmarks fine-tuned models across **quantization levels** (Q4, Q8)
-- Provides **RAG-based mitigation** for hallucination-prone steps
+- Uses an independent **70B judge** (Llama 3.3 via Groq) to grade each step
+- Identifies **where exactly** reasoning breaks across 4 task categories
+- Uses failure analysis to guide **targeted QLoRA fine-tuning**
+- Benchmarks fine-tuned vs base models with proper comparison
 
 **Task categories:**
-- Multi-step arithmetic (GSM8K)
-- Factual consistency
-- Tool-use planning
-- Causal/counterfactual reasoning
+- **Multistep Arithmetic** — GSM8K benchmark (1319 test problems)
+- **Factual Consistency** — 60 generated diverse tasks
+- **Tool-Use Planning** — 31 generated multi-tool tasks
+- **Causal Counterfactual** — 60 generated reasoning tasks
 
-**Models evaluated:** Llama-3.1-8B, Llama-3.3-70B, Llama-4-Scout (via Groq API)
+**Key results:**
+- Step failure rate: **11.7% → 1.1%** (91% reduction after fine-tuning)
+- Tool-use: 0% step failures, 100% accuracy
+- Fine-tuned 3B beats baseline 8B on reasoning quality
 
-**Tech stack:** Groq, LangChain, PEFT, bitsandbytes, llama.cpp, W&B, Streamlit
+**Tech stack:** Ollama · Groq · QLoRA · PEFT · TRL · llama.cpp · HuggingFace · Streamlit
     """)
+
