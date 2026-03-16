@@ -323,12 +323,17 @@ def main() -> None:
     decomposer = TaskDecomposer()
 
     # Determine evaluator model and client
-    # --judge-provider openai --judge-model gpt-4o-mini  → GPT-4o as independent judge
-    # --judge-provider ollama --judge-model qwen2.5:14b  → Qwen 14B as local judge
-    # (default) same as solver                           → original behaviour
+    # --judge-provider groq                           → Groq 70B as independent judge
+    # --judge-provider openai --judge-model gpt-4o    → GPT-4o as independent judge
+    # (default) same as solver                        → original behaviour
+    uses_separate_judge = judge_provider != provider
     if judge_model_override:
         judge_client = get_client(cfg, provider=judge_provider)
         evaluator_model = judge_model_override
+        logger.info(f"  Independent judge: {judge_provider}/{evaluator_model}")
+    elif uses_separate_judge:
+        judge_client = get_client(cfg, provider=judge_provider)
+        evaluator_model = cfg["models"]["evaluator_model"]
         logger.info(f"  Independent judge: {judge_provider}/{evaluator_model}")
     else:
         judge_client = client
@@ -341,8 +346,8 @@ def main() -> None:
         client=judge_client,
         evaluator_model=evaluator_model,
         # Pass separate judge for answer verification (eliminates self-grading for non-arithmetic)
-        judge_client=judge_client if judge_model_override else None,
-        judge_model=evaluator_model if judge_model_override else None,
+        judge_client=judge_client if uses_separate_judge or judge_model_override else None,
+        judge_model=evaluator_model if uses_separate_judge or judge_model_override else None,
     )
     hall_scorer = HallucinationScorer(
         client=judge_client,
