@@ -157,11 +157,13 @@ def _extract_final_answer(raw: str) -> str:
         boxed = _BOXED_PATTERN.search(answer)
         if boxed:
             return boxed.group(1).strip()
-        # Clean up trailing repetitions/noise
-        # Take only the first line if multi-line
-        first_line = answer.split('\n')[0].strip()
-        if first_line:
-            return first_line
+        # Only truncate to first line if we detect repetitive degeneration
+        # (model repeating itself). Keep full text for multi-line answers
+        # (important for factual/counterfactual where answers are sentences).
+        lines = [l.strip() for l in answer.split('\n') if l.strip()]
+        if len(lines) >= 4 and len(set(lines)) <= len(lines) // 2:
+            # Repetitive degeneration: many lines but few unique → take first
+            return lines[0]
         return answer
 
     # Try \boxed{} anywhere in response
