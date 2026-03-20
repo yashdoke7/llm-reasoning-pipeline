@@ -64,27 +64,25 @@ class TokenBudget:
         self._tokens = [(t, n) for t, n in self._tokens if now - t < window]
 
     def wait_if_needed(self, estimated_tokens: int = 200) -> None:
-        # Enforce minimum 5s gap between requests (~12 RPM effective)
-        # Groq free tier enforces stricter limits than documented
+        # Small gap to avoid burst — 0.3s = ~200 RPM effective (well under 300 limit)
         now = time.time()
         since_last = now - self._last_request
-        min_gap = 5.0
+        min_gap = 0.3
         if since_last < min_gap:
-            gap_sleep = min_gap - since_last
-            time.sleep(gap_sleep)
+            time.sleep(min_gap - since_last)
 
         self._clean()
-        # Trigger at 60% of RPM limit as safety net
-        rpm_threshold = int(self.rpm_limit * 0.6)
+        # Trigger at 80% of RPM limit
+        rpm_threshold = int(self.rpm_limit * 0.8)
         if len(self._requests) >= rpm_threshold:
             sleep = 62 - (time.time() - self._requests[0])
             if sleep > 0:
                 logger.info(f"Rate limit: sleeping {sleep:.1f}s (RPM {len(self._requests)}/{self.rpm_limit})")
                 time.sleep(sleep)
             self._clean()
-        # Trigger at 60% of TPM limit
+        # Trigger at 80% of TPM limit
         used = sum(n for _, n in self._tokens)
-        tpm_threshold = int(self.tpm_limit * 0.6)
+        tpm_threshold = int(self.tpm_limit * 0.8)
         if used + estimated_tokens >= tpm_threshold:
             if self._tokens:
                 sleep = 62 - (time.time() - self._tokens[0][0])
@@ -116,8 +114,8 @@ class GroqClient:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        tpm_limit: int = 14400,
-        rpm_limit: int = 30,
+        tpm_limit: int = 120_000,
+        rpm_limit: int = 300,
         max_retries: int = 5,
         base_delay: float = 1.0,
         max_delay: float = 60.0,
@@ -300,8 +298,8 @@ def get_client(cfg: Optional[dict] = None) -> GroqClient:
     if _client_instance is None:
         params = cfg.get("groq", {}) if cfg else {}
         _client_instance = GroqClient(
-            tpm_limit=params.get("tpm_limit", 14400),
-            rpm_limit=params.get("rpm_limit", 30),
+            tpm_limit=params.get("tpm_limit", 120_000),
+            rpm_limit=params.get("rpm_limit", 300),
             max_retries=params.get("max_retries", 5),
             base_delay=params.get("base_delay", 1.0),
             max_delay=params.get("max_delay", 60.0),
