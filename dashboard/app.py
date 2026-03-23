@@ -79,6 +79,10 @@ def load_all_eval_results() -> list[dict]:
             with open(f, encoding="utf-8") as fh:
                 data = json.load(fh)
             data["_filename"] = os.path.basename(f)
+            per_metrics = data.get("per_run_metrics", [])
+            model_summary = data.get("model_summary", [])
+            data["_is_valid_run"] = bool(per_metrics) and bool(model_summary)
+            data["_num_metrics_rows"] = len(per_metrics)
             results.append(data)
         except Exception:
             pass
@@ -140,13 +144,33 @@ if mode == "Results Comparison":
                 "--models qwen2.5:3b --judge-provider groq --samples 20 --no-wandb\n```")
         st.stop()
 
+    include_invalid = st.checkbox("Include invalid/empty runs", value=False)
+
+    valid_runs = [r for r in all_results if r.get("_is_valid_run")]
+    invalid_runs = [r for r in all_results if not r.get("_is_valid_run")]
+
+    if invalid_runs:
+        st.info(
+            f"Detected {len(invalid_runs)} invalid/empty run files. "
+            "These are usually aborted runs with 0 completed tasks."
+        )
+
+    runs_for_ui = all_results if include_invalid else valid_runs
+
     # Let user pick which runs to compare
     run_options = {}
-    for r in all_results:
+    for r in runs_for_ui:
         fname = r["_filename"]
         model = extract_model_name(fname)
+        tag = "[INVALID] " if not r.get("_is_valid_run") else ""
         label = f"{model} ({fname})"
+        if tag:
+            label = f"{tag}{label}"
         run_options[label] = r
+
+    if not run_options:
+        st.warning("No valid runs available with current filter settings.")
+        st.stop()
 
     selected_runs = st.multiselect(
         "Select runs to compare",
@@ -157,6 +181,29 @@ if mode == "Results Comparison":
     if not selected_runs:
         st.warning("Select at least one run to view results.")
         st.stop()
+
+    st.subheader("Run Health")
+    try:
+        import pandas as pd
+        import altair as alt
+
+        health_rows = []
+        for r in all_results:
+            health_rows.append({
+                "Run": r["_filename"],
+                "Status": "valid" if r.get("_is_valid_run") else "invalid",
+                "Metric Rows": r.get("_num_metrics_rows", 0),
+            })
+        health_df = pd.DataFrame(health_rows)
+        chart = alt.Chart(health_df).mark_bar().encode(
+            x=alt.X("Run:N", sort=None),
+            y=alt.Y("Metric Rows:Q"),
+            color=alt.Color("Status:N", scale=alt.Scale(domain=["valid", "invalid"], range=["#2ECC71", "#E74C3C"])),
+            tooltip=["Run", "Status", "Metric Rows"],
+        ).properties(height=220)
+        st.altair_chart(chart, use_container_width=True)
+    except Exception:
+        pass
 
     # ── Overall comparison table ──────────────────────────────
     st.subheader("Overall Model Comparison")
@@ -185,6 +232,20 @@ if mode == "Results Comparison":
             }),
             use_container_width=True,
         )
+
+        # Accuracy vs step-failure scatter makes regressions obvious.
+        try:
+            import altair as alt
+            scatter = alt.Chart(df).mark_circle(size=150).encode(
+                x=alt.X("Step Failure:Q", title="Step Failure Rate"),
+                y=alt.Y("Accuracy:Q", title="Final Accuracy", scale=alt.Scale(domain=[0, 1])),
+                color=alt.Color("Model:N"),
+                tooltip=["Model", "Tasks", "Accuracy", "Step Failure", "Error Propagation"],
+            ).properties(height=320)
+            st.markdown("**Accuracy vs Step Failure**")
+            st.altair_chart(scatter, use_container_width=True)
+        except Exception:
+            pass
 
     # ── Per-category comparison ───────────────────────────────
     st.subheader("Per-Category Breakdown")
