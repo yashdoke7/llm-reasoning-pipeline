@@ -422,6 +422,21 @@ class StepEvaluator:
 
         return result
 
+    def check_answer_correctness(
+        self,
+        predicted: str,
+        ground_truth: str,
+        category: str,
+    ) -> Optional[bool]:
+        """Public wrapper for final-answer equivalence checks."""
+        return _check_answer_correctness(
+            predicted,
+            ground_truth,
+            category,
+            judge_client=self._judge_client,
+            judge_model=self._judge_model,
+        )
+
     def _ground_truth_backtrack(
         self,
         result: TaskEvaluation,

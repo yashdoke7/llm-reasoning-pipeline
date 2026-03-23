@@ -35,6 +35,11 @@ project:
 # ── API Keys (set via env vars — never hardcode) ──────────────
 api:
   groq_api_key_env: "GROQ_API_KEY"          # export GROQ_API_KEY=your_key
+  # Optional key rotation pool for long evaluations.
+  # If key_1 reaches TPD, client automatically switches to key_2, then key_3.
+  groq_api_key_envs:
+    - "GROQ_API_KEY"
+    - "GROQ_API_KEY_2"
   openai_api_key_env: "OPENAI_API_KEY"       # export OPENAI_API_KEY=sk-...  (for judge)
   wandb_api_key_env: "WANDB_API_KEY"         # export WANDB_API_KEY=your_key
   wandb_project: "llm-reasoning-eval"
@@ -55,6 +60,8 @@ models:
 
   evaluator_model: "llama-3.3-70b-versatile"   # judge model — 70B, free via Groq
   trace_gen_model: "llama-3.3-70b-versatile"
+  # Local judge (recommended when running Ollama solver to avoid Groq TPD).
+  local_judge_model: "qwen2.5:14b"
 
 # ── Groq API Settings ─────────────────────────────────────────
 groq:

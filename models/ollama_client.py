@@ -57,6 +57,7 @@ class OllamaClient:
         temperature: float = 0.1,
         max_tokens: int = 1024,
         json_mode: bool = False,
+        keep_alive: Optional[str | int] = None,
     ) -> LLMResponse:
         messages = []
         if system_prompt:
@@ -73,6 +74,9 @@ class OllamaClient:
         }
         if json_mode:
             kwargs["format"] = "json"
+        
+        if keep_alive is not None:
+            kwargs["keep_alive"] = keep_alive
 
         start = time.time()
         response = self._client.chat(**kwargs)

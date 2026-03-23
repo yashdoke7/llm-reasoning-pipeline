@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 # ── Path setup ────────────────────────────────────────────────
@@ -60,6 +61,52 @@ def setup_logging(cfg: dict) -> None:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _dataset_source_summary(category: str, cfg: dict) -> dict:
+    ds_cfg = cfg.get("datasets", {})
+    source = {"category": category, "kind": "unknown", "path": None, "exists": None}
+
+    if category == "multistep_arithmetic":
+        source["kind"] = "huggingface_gsm8k"
+        source["path"] = ds_cfg.get("gsm8k", {}).get("cache_dir")
+        source["exists"] = os.path.exists(source["path"]) if source["path"] else None
+        return source
+
+    if category == "causal_counterfactual":
+        p = ds_cfg.get("crass", {}).get("path")
+        source["path"] = p
+        if p and os.path.exists(p):
+            source["kind"] = "counterfactual_file"
+            source["exists"] = True
+        else:
+            source["kind"] = "counterfactual_fallback"
+            source["exists"] = False
+        return source
+
+    if category == "tool_use_planning":
+        p = ds_cfg.get("toolbench", {}).get("path")
+        source["path"] = p
+        if p and os.path.exists(p):
+            source["kind"] = "tooluse_generated_file"
+            source["exists"] = True
+        else:
+            source["kind"] = "tooluse_builtin_fallback"
+            source["exists"] = False
+        return source
+
+    if category == "factual_consistency":
+        p = ds_cfg.get("factual_synthetic", {}).get("path")
+        source["path"] = p
+        if p and os.path.exists(p):
+            source["kind"] = "factual_generated_file"
+            source["exists"] = True
+        else:
+            source["kind"] = "factual_builtin_fallback"
+            source["exists"] = False
+        return source
+
+    return source
 
 
 # ── Dataset loader ────────────────────────────────────────────
@@ -152,6 +199,7 @@ def run_model_category(
     aggregator: MetricsAggregator,
     eval_cfg: dict,
     run_mitigation: bool = True,
+    mitigation_eval_mode: str = "none",
 ) -> list[dict]:
     """
     Run evaluation for one (model, category) pair.
@@ -176,13 +224,25 @@ def run_model_category(
 
         # ── 2. Generate reasoning trace ───────────────────────
         try:
+            # For Ollama, force unload the solver model after generation to free VRAM for the judge
+            # This prevents 500 errors when running large models alongside the judge
+            call_kwargs = {}
+            if client.__class__.__name__ == "OllamaClient":
+                call_kwargs["keep_alive"] = 0
+
             resp = client.complete(
                 model=model_id,
                 user_prompt=decomposed.prompt,
                 system_prompt=decomposer.get_system_prompt(category),
                 temperature=eval_cfg["temperature"],
                 max_tokens=eval_cfg["max_tokens"],
+                **call_kwargs,
             )
+            
+            # Brief pause to allow Ollama to unload the model from VRAM
+            if client.__class__.__name__ == "OllamaClient":
+                time.sleep(2.0)
+                
             decomposed = decomposer.parse_response(decomposed, resp.content)
         except Exception as e:
             logger.error(f"[{task_id}] Generation error: {e}")
@@ -209,6 +269,8 @@ def run_model_category(
 
         # ── 6. Mitigation (for flagged tasks OR wrong answers) ──
         mitigation_results = {}
+        rg_result = None
+        rp_result = None
         if run_mitigation and (
             task_eval.num_invalid > 0
             or hall_summary["flagged_steps"] > 0
@@ -235,6 +297,54 @@ def run_model_category(
                 "reprompt": regrounder.to_dict(rp_result),
             }
 
+        # Optional: score aggregate metrics on mitigated outputs.
+        # This does not change raw per-step verdicts, only which final answer is
+        # considered for final-accuracy / propagation aggregation.
+        effective_answer_mode = "original"
+        if mitigation_eval_mode != "none" and decomposed.ground_truth:
+            mode_to_answer = {}
+            if rg_result and rg_result.success:
+                mode_to_answer["rag"] = rg_result.regrounded_answer
+            if rp_result and rp_result.success:
+                mode_to_answer["reprompt"] = rp_result.regrounded_answer
+
+            if mitigation_eval_mode in ("rag", "reprompt") and mitigation_eval_mode in mode_to_answer:
+                candidate = mode_to_answer[mitigation_eval_mode]
+                candidate_correct = step_evaluator.check_answer_correctness(
+                    candidate,
+                    decomposed.ground_truth,
+                    decomposed.category,
+                )
+                if candidate_correct is not None:
+                    task_eval.final_answer_correct = candidate_correct
+                    task_eval.error_propagated = (
+                        task_eval.first_failure_step is not None
+                        and candidate_correct is False
+                    )
+                    effective_answer_mode = mitigation_eval_mode
+
+            elif mitigation_eval_mode == "best":
+                best_mode = "original"
+                best_correct = task_eval.final_answer_correct
+
+                for cand_mode, cand_answer in mode_to_answer.items():
+                    cand_correct = step_evaluator.check_answer_correctness(
+                        cand_answer,
+                        decomposed.ground_truth,
+                        decomposed.category,
+                    )
+                    if cand_correct is True and best_correct is not True:
+                        best_correct = True
+                        best_mode = cand_mode
+
+                if best_correct is not None:
+                    task_eval.final_answer_correct = best_correct
+                    task_eval.error_propagated = (
+                        task_eval.first_failure_step is not None
+                        and best_correct is False
+                    )
+                    effective_answer_mode = best_mode
+
         # ── 7. Register with aggregator ───────────────────────
         aggregator.add_task_eval(task_eval, hall_scores, drift_result)
 
@@ -248,6 +358,7 @@ def run_model_category(
             },
             "drift": drift_detector.to_dict(drift_result),
             "mitigation": mitigation_results,
+            "effective_answer_mode": effective_answer_mode,
         }
         raw_results.append(raw_result)
 
@@ -282,6 +393,13 @@ def main() -> None:
     parser.add_argument("--judge-model", default=None,
                         help="Model ID for the judge (used with --judge-provider). "
                              "Examples: gpt-4o-mini, gpt-4o, qwen2.5:14b")
+    parser.add_argument(
+        "--mitigation-metrics",
+        choices=["none", "rag", "reprompt", "best"],
+        default="none",
+        help="How to compute aggregate final accuracy when mitigation is enabled. "
+             "none=original only, rag=RAG answer, reprompt=reprompt answer, best=best among original/rag/reprompt",
+    )
     args = parser.parse_args()
 
     # ── Load config ───────────────────────────────────────────
@@ -308,12 +426,15 @@ def main() -> None:
     judge_provider = args.judge_provider or provider
     judge_model_override = args.judge_model
 
+    run_start_ts = time.time()
+
     logger.info("=" * 60)
     logger.info("LLM REASONING EVALUATION — PHASE 1 BASELINE")
     logger.info(f"  Models:     {models}")
     logger.info(f"  Categories: {categories}")
     logger.info(f"  Samples:    {cfg['eval']['samples_per_category']}")
     logger.info(f"  Mitigation: {run_mitigation}")
+    logger.info(f"  Mitigation metrics mode: {args.mitigation_metrics}")
     logger.info(f"  Solver:     {provider}")
     logger.info(f"  Judge:      {judge_provider}" + (f" ({judge_model_override})" if judge_model_override else ""))
     logger.info("=" * 60)
@@ -339,7 +460,7 @@ def main() -> None:
         judge_client = client
         evaluator_model = args.evaluator or cfg["models"]["evaluator_model"]
         if provider == "ollama" and not args.evaluator:
-            evaluator_model = models[0]
+            evaluator_model = cfg.get("models", {}).get("local_judge_model", models[0])
             logger.info(f"  Ollama mode: using '{evaluator_model}' as evaluator model")
 
     step_evaluator = StepEvaluator(
@@ -381,10 +502,17 @@ def main() -> None:
     # ── Pre-load all datasets ─────────────────────────────────
     logger.info("Loading datasets...")
     category_tasks: dict[str, list[dict]] = {}
+    dataset_sources: dict[str, dict] = {}
     for cat in categories:
         tasks = load_category_tasks(cat, cfg)
         category_tasks[cat] = tasks
+        dataset_sources[cat] = _dataset_source_summary(cat, cfg)
         logger.info(f"  {cat}: {len(tasks)} tasks loaded")
+        ds = dataset_sources[cat]
+        logger.info(
+            f"    source={ds['kind']}"
+            + (f" path={ds['path']}" if ds.get("path") else "")
+        )
 
     # ── Main eval loop ────────────────────────────────────────
     all_raw_results = {}
@@ -418,6 +546,7 @@ def main() -> None:
                     aggregator=aggregator,
                     eval_cfg=cfg["eval"],
                     run_mitigation=run_mitigation,
+                    mitigation_eval_mode=args.mitigation_metrics,
                 )
             except DailyLimitExhaustedError:
                 logger.error("=" * 60)
@@ -454,11 +583,68 @@ def main() -> None:
     with open(failure_path, "w") as f:
         json.dump(metrics["failure_report"], f, indent=2)
 
+    # Save run manifest for reproducibility and debugging.
+    completed_tasks = 0
+    attempted_tasks = 0
+    for model_id in models:
+        display = model_display.get(model_id, model_id)
+        by_cat = all_raw_results.get(display, {})
+        for cat in categories:
+            attempted_tasks += len(category_tasks.get(cat, []))
+            completed_tasks += len(by_cat.get(cat, []))
+
+    solver_usage = None
+    judge_usage = None
+    try:
+        if hasattr(client, "get_usage_summary"):
+            solver_usage = client.get_usage_summary()
+    except Exception:
+        solver_usage = None
+    try:
+        if hasattr(judge_client, "get_usage_summary"):
+            judge_usage = judge_client.get_usage_summary()
+    except Exception:
+        judge_usage = None
+
+    run_manifest = {
+        "run_suffix": run_suffix,
+        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        "duration_seconds": round(time.time() - run_start_ts, 2),
+        "solver_provider": provider,
+        "judge_provider": judge_provider,
+        "judge_model": evaluator_model,
+        "models": models,
+        "categories": categories,
+        "samples_per_category": cfg["eval"]["samples_per_category"],
+        "mitigation_enabled": run_mitigation,
+        "mitigation_metrics_mode": args.mitigation_metrics,
+        "dataset_sources": dataset_sources,
+        "tasks_attempted": attempted_tasks,
+        "tasks_completed": completed_tasks,
+        "tasks_missing": max(0, attempted_tasks - completed_tasks),
+        "partial_run": completed_tasks < attempted_tasks,
+        "daily_limit_hit": daily_limit_hit,
+        "output_files": {
+            "eval_results": output_path,
+            "raw_results": raw_path,
+            "failure_report": failure_path,
+        },
+        "solver_usage": solver_usage,
+        "judge_usage": judge_usage,
+    }
+
+    manifest_path = os.path.join(
+        cfg["paths"]["outputs"], f"run_manifest_{run_suffix}.json"
+    )
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(run_manifest, f, indent=2)
+
     # Also save a "latest" symlink-style copy for downstream tools
     for src, dst in [
         (output_path, os.path.join(cfg["paths"]["outputs"], "eval_results.json")),
         (raw_path, os.path.join(cfg["paths"]["outputs"], "raw_results.json")),
         (failure_path, cfg["paths"]["failure_report"]),
+        (manifest_path, os.path.join(cfg["paths"]["outputs"], "run_manifest.json")),
     ]:
         with open(src) as f_in:
             data = f_in.read()
@@ -480,6 +666,7 @@ def main() -> None:
     logger.info(f"\nFine-tuning target: {metrics['failure_report'].get('finetune_target_category')}")
     logger.info(f"Results saved to:   {output_path}")
     logger.info(f"Failure report:     {failure_path}")
+    logger.info(f"Run manifest:       {manifest_path}")
 
 
 if __name__ == "__main__":

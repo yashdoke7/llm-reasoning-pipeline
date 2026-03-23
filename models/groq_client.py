@@ -114,6 +114,8 @@ class GroqClient:
     def __init__(
         self,
         api_key: Optional[str] = None,
+        api_keys: Optional[list[str]] = None,
+        api_key_envs: Optional[list[str]] = None,
         tpm_limit: int = 120_000,
         rpm_limit: int = 300,
         max_retries: int = 5,
@@ -121,12 +123,46 @@ class GroqClient:
         max_delay: float = 60.0,
         timeout: float = 30.0,
     ) -> None:
-        key = api_key or os.environ.get("GROQ_API_KEY")
-        if not key:
+        key_pool: list[str] = []
+
+        # Explicit key list has highest priority.
+        if api_keys:
+            key_pool.extend([k for k in api_keys if k])
+
+        # Single direct key fallback.
+        if api_key:
+            key_pool.append(api_key)
+
+        # Load keys from configured env vars.
+        if api_key_envs:
+            for env_name in api_key_envs:
+                val = os.environ.get(env_name)
+                if val:
+                    key_pool.append(val)
+
+        # Default legacy env var fallback.
+        if not key_pool:
+            default_key = os.environ.get("GROQ_API_KEY")
+            if default_key:
+                key_pool.append(default_key)
+
+        # Deduplicate while preserving order.
+        dedup_pool: list[str] = []
+        for key in key_pool:
+            if key not in dedup_pool:
+                dedup_pool.append(key)
+
+        if not dedup_pool:
             raise EnvironmentError(
                 "GROQ_API_KEY not set. Run: export GROQ_API_KEY=your_key"
             )
-        self._client = Groq(api_key=key, timeout=timeout)
+
+        self._api_keys = dedup_pool
+        self._active_key_index = 0
+        self._exhausted_key_indexes: set[int] = set()
+        self._timeout = timeout
+
+        self._client = Groq(api_key=self._api_keys[self._active_key_index], timeout=timeout)
         self._budget = TokenBudget(tpm_limit=tpm_limit, rpm_limit=rpm_limit)
         self._max_retries = max_retries
         self._base_delay = base_delay
@@ -136,6 +172,30 @@ class GroqClient:
         self._total_completion_tokens = 0
         self._total_requests = 0
         self._unavailable_models: set[str] = set()
+
+    def _active_key_label(self) -> str:
+        return f"key_{self._active_key_index + 1}"
+
+    def _switch_to_next_key(self) -> bool:
+        """Switch to next non-exhausted API key. Returns False if none left."""
+        self._exhausted_key_indexes.add(self._active_key_index)
+
+        for idx in range(len(self._api_keys)):
+            if idx in self._exhausted_key_indexes:
+                continue
+            self._active_key_index = idx
+            self._client = Groq(api_key=self._api_keys[idx], timeout=self._timeout)
+            # Reset per-minute budget for new key.
+            self._budget = TokenBudget(
+                tpm_limit=self._budget.tpm_limit,
+                rpm_limit=self._budget.rpm_limit,
+            )
+            logger.warning(
+                "Switched Groq API key due to daily limit exhaustion. "
+                f"Now using {self._active_key_label()}."
+            )
+            return True
+        return False
 
     def complete(
         self,
@@ -184,7 +244,16 @@ class GroqClient:
             kwargs["response_format"] = {"type": "json_object"}
 
         start = time.time()
-        response = self._complete_with_retry(**kwargs)
+        while True:
+            try:
+                response = self._complete_with_retry(**kwargs)
+                break
+            except DailyLimitExhaustedError:
+                if self._switch_to_next_key():
+                    continue
+                raise DailyLimitExhaustedError(
+                    "All configured Groq API keys are exhausted for daily token quota (TPD)."
+                )
         latency_ms = (time.time() - start) * 1000
 
         usage = response.usage
@@ -222,11 +291,10 @@ class GroqClient:
             if "tokens per day" in err_msg or "tpd" in err_msg:
                 logger.error(
                     "Daily token limit (TPD) exhausted on Groq free tier. "
-                    "Stopping — retry tomorrow or upgrade at console.groq.com/settings/billing"
+                    f"Active {self._active_key_label()} exhausted."
                 )
                 raise DailyLimitExhaustedError(
-                    "Groq daily token quota (500K TPD) exhausted. "
-                    "Wait until reset or upgrade to Dev Tier."
+                    "Groq daily token quota (TPD) exhausted for active key."
                 ) from e
             logger.warning("Groq rate limit hit — backing off")
             raise
@@ -280,6 +348,9 @@ class GroqClient:
             "total_completion_tokens": self._total_completion_tokens,
             "total_tokens": self._total_prompt_tokens + self._total_completion_tokens,
             "unavailable_models": list(self._unavailable_models),
+            "groq_keys_configured": len(self._api_keys),
+            "groq_keys_exhausted": len(self._exhausted_key_indexes),
+            "groq_active_key": self._active_key_label(),
         }
 
     def is_model_available(self, model: str) -> bool:
@@ -297,7 +368,15 @@ def get_client(cfg: Optional[dict] = None) -> GroqClient:
     global _client_instance
     if _client_instance is None:
         params = cfg.get("groq", {}) if cfg else {}
+        api_cfg = cfg.get("api", {}) if cfg else {}
+
+        api_envs = api_cfg.get("groq_api_key_envs")
+        if not api_envs:
+            single_env = api_cfg.get("groq_api_key_env", "GROQ_API_KEY")
+            api_envs = [single_env]
+
         _client_instance = GroqClient(
+            api_key_envs=api_envs,
             tpm_limit=params.get("tpm_limit", 120_000),
             rpm_limit=params.get("rpm_limit", 300),
             max_retries=params.get("max_retries", 5),

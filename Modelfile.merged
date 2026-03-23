@@ -1,0 +1,1 @@
+FROM ./outputs/qwen2.5-3b-mixed-v1-f16.gguf
