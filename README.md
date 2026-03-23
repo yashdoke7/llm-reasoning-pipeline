@@ -95,6 +95,43 @@ ollama pull qwen2.5:3b
 
 Then set `provider: "ollama"` in `configs/config.yaml`.
 
+### Submission Recovery Modes
+
+Use one of these two stable evaluation modes for consistent results:
+
+1) Local, no API limits (recommended while iterating)
+```bash
+python experiments/run_baseline_eval.py \
+        --provider ollama \
+        --models qwen2.5:14b \
+        --judge-provider ollama \
+        --judge-model qwen2.5:14b \
+        --samples 20 --no-wandb --mitigation-metrics none
+```
+
+2) Cloud judge with automatic Groq key rotation on TPD exhaustion
+```bash
+# .env can include both keys:
+# GROQ_API_KEY=...
+# GROQ_API_KEY_2=...
+
+python experiments/run_baseline_eval.py \
+        --provider ollama \
+        --models qwen2.5:14b \
+        --judge-provider groq \
+        --judge-model llama-3.3-70b-versatile \
+        --samples 20 --no-wandb --mitigation-metrics none
+```
+
+To compare mitigation impact separately (instead of mixing with baseline), rerun with:
+```bash
+--mitigation-metrics rag
+```
+or
+```bash
+--mitigation-metrics best
+```
+
 ### 3. Run Evaluation
 
 ```bash
@@ -107,6 +144,54 @@ python experiments/run_baseline_eval.py
 # Single model + category
 python experiments/run_baseline_eval.py --models qwen2.5:3b --categories multistep_arithmetic --samples 50
 ```
+
+### 4. Audit Dataset Mix (Prevent Category Mismatch)
+
+Before fine-tuning, verify your training JSONL is not accidentally single-category heavy:
+
+```bash
+python finetune/audit_finetune_dataset.py
+```
+
+If one category dominates (for example arithmetic-only), regenerate a mixed dataset:
+
+```bash
+python finetune/dataset_builder.py \
+        --category mixed \
+        --samples 1200 \
+        --provider ollama \
+        --trace-model qwen2.5:14b \
+        --quality-provider ollama \
+        --quality-model qwen2.5:14b
+```
+
+Then re-audit:
+
+```bash
+python finetune/audit_finetune_dataset.py
+```
+
+### 5. Generate Static Charts
+
+After evaluation, generate PNG charts in outputs/charts:
+
+```bash
+python experiments/generate_charts.py
+```
+
+Latest run only:
+
+```bash
+python experiments/generate_charts.py --latest-only
+```
+
+### 6. Run Manifests
+
+Each evaluation now writes a run manifest JSON containing solver/judge settings,
+dataset sources, completion counts, and output file references:
+
+- `outputs/run_manifest_<run_suffix>.json`
+- `outputs/run_manifest.json` (latest)
 
 ---
 
