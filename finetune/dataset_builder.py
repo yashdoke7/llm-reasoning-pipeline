@@ -91,6 +91,8 @@ def _is_correct_trace(
     raw_response: str,
     ground_truth: str,
     category: str,
+    quality_client=None,
+    quality_model: str | None = None,
 ) -> bool:
     """
     Quick correctness check before adding to training set.
@@ -151,6 +153,30 @@ def _is_correct_trace(
         if truth_content and len(truth_content & pred_content) / len(truth_content) > 0.4:
             return True
 
+    # Optional final semantic check via independent judge for non-arithmetic tasks.
+    if quality_client and quality_model and category != "multistep_arithmetic":
+        try:
+            judge_prompt = (
+                f"Category: {category}\n\n"
+                f"Ground truth answer: {ground_truth}\n\n"
+                f"Candidate answer: {final_answer}\n\n"
+                "Return JSON: {\"correct\": true|false, \"reason\": \"...\"}."
+            )
+            raw = quality_client.complete_json(
+                model=quality_model,
+                user_prompt=judge_prompt,
+                system_prompt=(
+                    "You are a strict evaluator. Mark correct=true only if the candidate "
+                    "captures the key factual content of ground truth."
+                ),
+                temperature=0.0,
+                max_tokens=120,
+            )
+            return bool(raw.get("correct", False))
+        except Exception:
+            # Fall through to conservative rejection if semantic judge fails.
+            return False
+
     return False
 
 
@@ -162,6 +188,8 @@ def build_dataset(
     output_path: str = "datasets/data/finetune_dataset.jsonl",
     provider: str = "groq",
     trace_model_override: str = None,
+    quality_client=None,
+    quality_model: str | None = None,
 ) -> int:
     """
     Generate fine-tuning dataset for a given category.
@@ -201,12 +229,14 @@ def build_dataset(
                     break
 
                 attempted += 1
-                task_id = task_dict.get("id", f"{category}_{attempted:05d}")
-                fields = task_to_decomposer_fields(task_dict, category)
-                gt = ground_truth_for_category(task_dict, category)
+                # Detect real category if mixed
+                real_cat = task_dict.get("category", category)
+                task_id = task_dict.get("id", f"{real_cat}_{attempted:05d}")
+                fields = task_to_decomposer_fields(task_dict, real_cat)
+                gt = ground_truth_for_category(task_dict, real_cat)
 
                 # Build prompt
-                user_prompt = decomposer.build_prompt(category, **fields)
+                user_prompt = decomposer.build_prompt(real_cat, **fields)
                 system = _TRACE_GEN_SYSTEM
 
                 try:
@@ -218,12 +248,19 @@ def build_dataset(
                         max_tokens=eval_cfg["max_tokens"],
                     )
                     raw = resp.content
+
                 except Exception as e:
                     logger.warning(f"[{task_id}] Generation error: {e}")
                     continue
 
                 # Verify correctness before adding
-                if gt and not _is_correct_trace(raw, gt, category):
+                if gt and not _is_correct_trace(
+                    raw,
+                    gt,
+                    real_cat,
+                    quality_client=quality_client,
+                    quality_model=quality_model,
+                ):
                     skipped_incorrect += 1
                     if skipped_incorrect % 50 == 0:
                         logger.debug(f"Skipped {skipped_incorrect} incorrect traces so far")
@@ -256,6 +293,17 @@ def main() -> None:
                         help="LLM provider for trace generation. openai=GPT-4.1/GPT-5.3 (best quality)")
     parser.add_argument("--trace-model", default=None,
                         help="Model for generating traces (e.g. qwen2.5:7b)")
+    parser.add_argument(
+        "--quality-provider",
+        choices=["groq", "ollama", "openai"],
+        default=None,
+        help="Optional independent provider for correctness filtering of generated traces",
+    )
+    parser.add_argument(
+        "--quality-model",
+        default=None,
+        help="Optional model for independent correctness filtering (e.g. qwen2.5:14b or gpt-4o-mini)",
+    )
     args = parser.parse_args()
 
     config_path = _ROOT / args.config
@@ -268,9 +316,25 @@ def main() -> None:
         handlers=[logging.StreamHandler(sys.stdout)],
     )
 
+    # Load tasks (use training split for fine-tuning, not test)
+    cfg_for_load = dict(cfg)
+    cfg_for_load["datasets"]["gsm8k"]["split"] = "train"
+    cfg_for_load["eval"]["samples_per_category"] = 5000  # large pool
+
     # Determine target category from failure report
     category = args.category
-    if not category:
+    
+    # NEW: If category is "mixed", combine multiple failure types
+    if category == "mixed":
+        logger.info("Building mixed dataset (Arithmetic + Factual + Tool-Use + Counterfactual)")
+        tasks = []
+        # Weighted mix: 40% arithmetic (hardest), 20% each other
+        tasks.extend(load_category_tasks("multistep_arithmetic", cfg_for_load)[:1200])
+        tasks.extend(load_category_tasks("factual_consistency", cfg_for_load)[:600])
+        tasks.extend(load_category_tasks("tool_use_planning", cfg_for_load)[:600])
+        tasks.extend(load_category_tasks("causal_counterfactual", cfg_for_load)[:600])
+        logger.info(f"Total mixed tasks pool: {len(tasks)}")
+    elif not category:
         failure_path = cfg["paths"]["failure_report"]
         if os.path.exists(failure_path):
             with open(failure_path) as f:
@@ -281,14 +345,25 @@ def main() -> None:
             category = "multistep_arithmetic"
             logger.warning(f"No failure report found — defaulting to {category}")
 
-    # Load tasks (use training split for fine-tuning, not test)
-    cfg_for_load = dict(cfg)
-    cfg_for_load["datasets"]["gsm8k"]["split"] = "train"
-    cfg_for_load["eval"]["samples_per_category"] = 5000  # large pool
-    tasks = load_category_tasks(category, cfg_for_load)
+    if category != "mixed":
+        # Load tasks for single category
+        tasks = load_category_tasks(category, cfg_for_load)
+
+    # Use "mixed" as the category label for file generation if mixed
+    if not category:
+        category = "mixed"
 
     target_size = args.samples or 3000
     output = args.output or cfg["finetune"]["dataset_path"]
+
+    quality_client = None
+    quality_model = None
+    if args.quality_provider:
+        quality_client = get_client(cfg, provider=args.quality_provider)
+        quality_model = args.quality_model or cfg["models"]["evaluator_model"]
+        logger.info(
+            f"Using independent quality judge: {args.quality_provider}/{quality_model}"
+        )
 
     n = build_dataset(
         category=category,
@@ -298,6 +373,8 @@ def main() -> None:
         output_path=output,
         provider=args.provider,
         trace_model_override=args.trace_model,
+        quality_client=quality_client,
+        quality_model=quality_model,
     )
 
     logger.info(f"\nFine-tuning dataset complete: {n} examples at {output}")
