@@ -82,14 +82,23 @@ def quantize_gguf(
     llama_cpp_dir: str,
 ) -> str:
     """Step 2: Quantize GGUF to target quantization level."""
-    quantize_bin = os.path.join(llama_cpp_dir, "llama-quantize")
-    if not os.path.exists(quantize_bin):
-        # Try alternative name
-        quantize_bin = os.path.join(llama_cpp_dir, "quantize")
-    if not os.path.exists(quantize_bin):
+    quant_candidates = [
+        os.path.join(llama_cpp_dir, "llama-quantize"),
+        os.path.join(llama_cpp_dir, "quantize"),
+        os.path.join(llama_cpp_dir, "llama-quantize.exe"),
+        os.path.join(llama_cpp_dir, "quantize.exe"),
+        os.path.join(llama_cpp_dir, "build", "bin", "llama-quantize"),
+        os.path.join(llama_cpp_dir, "build", "bin", "quantize"),
+        os.path.join(llama_cpp_dir, "build", "bin", "Release", "llama-quantize.exe"),
+        os.path.join(llama_cpp_dir, "build", "bin", "Release", "quantize.exe"),
+        os.path.join(llama_cpp_dir, "build", "bin", "llama-quantize.exe"),
+        os.path.join(llama_cpp_dir, "build", "bin", "quantize.exe"),
+    ]
+    quantize_bin = next((p for p in quant_candidates if os.path.exists(p)), None)
+    if not quantize_bin:
         raise FileNotFoundError(
             f"llama-quantize binary not found in {llama_cpp_dir}. "
-            "Run 'make' inside the llama.cpp directory."
+            "Build it first. On Windows run: cmake -S . -B build ; cmake --build build --config Release --target llama-quantize"
         )
 
     out_path = os.path.join(output_dir, f"model_{quant_type.lower()}.gguf")
@@ -135,6 +144,10 @@ def run_quantization(
         try:
             out = quantize_gguf(fp16_path, quant_type, output_dir, llama_dir)
             results[quant_type] = out
+        except FileNotFoundError as e:
+            logger.error(f"Quantizer binary unavailable, skipping {quant_type}: {e}")
+            logger.info("Proceeding with FP16 GGUF only.")
+            break
         except RuntimeError as e:
             logger.error(f"Failed to quantize {quant_type}: {e}")
 
