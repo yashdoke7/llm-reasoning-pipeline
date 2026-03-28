@@ -193,6 +193,14 @@ dataset sources, completion counts, and output file references:
 - `outputs/run_manifest_<run_suffix>.json`
 - `outputs/run_manifest.json` (latest)
 
+### 7. Updated Playbook (General + Physics)
+
+For the latest end-to-end commands (including failure-targeted dataset building,
+physics-specific benchmarking, and UI prompt workflows), see:
+
+- `docs/EXECUTION_PLAYBOOK.md`
+- `docs/DATASET_PROMPTS_UI.md`
+
 ---
 
 ## 🏗 Architecture
