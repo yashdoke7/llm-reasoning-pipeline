@@ -252,6 +252,28 @@ def _heuristic_check(pred: str, truth: str, category: str) -> Optional[bool]:
                 return False
         return None
 
+    if category == "physics_reasoning":
+        # Prefer numeric-equivalence when possible (units may differ in wording).
+        nums_pred = re.findall(r"-?\d+(?:\.\d+)?", pred)
+        nums_truth = re.findall(r"-?\d+(?:\.\d+)?", truth)
+        if nums_pred and nums_truth:
+            try:
+                if abs(float(nums_pred[-1]) - float(nums_truth[-1])) < 1e-6:
+                    return True
+                return False
+            except ValueError:
+                pass
+        # Fall back to content overlap when numeric parsing is not informative.
+        truth_words = set(re.findall(r"\w+", truth))
+        pred_words = set(re.findall(r"\w+", pred))
+        if truth_words:
+            overlap = len(truth_words & pred_words) / len(truth_words)
+            if overlap >= 0.6:
+                return True
+            if overlap < 0.2:
+                return False
+        return None
+
     return None
 
 

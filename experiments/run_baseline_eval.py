@@ -40,6 +40,7 @@ from data_loaders.gsm8k_loader import load_gsm8k, sample_to_dict as gsm8k_to_dic
 from data_loaders.crass_loader import load_crass, sample_to_dict as crass_to_dict
 from data_loaders.toolbench_loader import load_toolbench, sample_to_dict as tool_to_dict, format_tools_for_prompt
 from data_loaders.factual_synthetic import load_factual_synthetic, sample_to_dict as factual_to_dict
+from data_loaders.physics_loader import load_physics, sample_to_dict as physics_to_dict
 
 
 # ── Logging setup ─────────────────────────────────────────────
@@ -106,6 +107,17 @@ def _dataset_source_summary(category: str, cfg: dict) -> dict:
             source["exists"] = False
         return source
 
+    if category == "physics_reasoning":
+        p = ds_cfg.get("physics", {}).get("path")
+        source["path"] = p
+        if p and os.path.exists(p):
+            source["kind"] = "physics_jsonl_file"
+            source["exists"] = True
+        else:
+            source["kind"] = "physics_missing"
+            source["exists"] = False
+        return source
+
     return source
 
 
@@ -145,6 +157,13 @@ def load_category_tasks(category: str, cfg: dict) -> list[dict]:
         )
         return [factual_to_dict(s) for s in samples]
 
+    elif category == "physics_reasoning":
+        samples = load_physics(
+            path=ds_cfg["physics"]["path"],
+            max_samples=n,
+        )
+        return [physics_to_dict(s) for s in samples]
+
     else:
         raise ValueError(f"Unknown category: {category}")
 
@@ -166,10 +185,26 @@ def task_to_decomposer_fields(task_dict: dict, category: str) -> dict:
             "premise": task_dict["premise"],
             "question": task_dict["question"],
         }
+    elif category == "physics_reasoning":
+        return {"question": task_dict["question"]}
     return {}
 
 
 def ground_truth_for_category(task_dict: dict, category: str) -> str:
+    def _tool_step_to_text(step) -> str:
+        if isinstance(step, str):
+            return step
+        if isinstance(step, dict):
+            tool = step.get("tool") or step.get("name") or "tool"
+            params = step.get("params", {})
+            if isinstance(params, dict) and params:
+                ptxt = ", ".join(f"{k}={v!r}" for k, v in params.items())
+                return f"Call {tool} with {ptxt}"
+            if isinstance(params, list) and params:
+                return f"Call {tool} with {', '.join(str(p) for p in params)}"
+            return f"Call {tool}"
+        return str(step)
+
     if category == "multistep_arithmetic":
         return task_dict.get("ground_truth", "")
     elif category == "factual_consistency":
@@ -179,7 +214,10 @@ def ground_truth_for_category(task_dict: dict, category: str) -> str:
         return task_dict.get("correct_answer", "")
     elif category == "tool_use_planning":
         steps = task_dict.get("correct_plan", [])
-        return " | ".join(steps) if steps else "Plan complete."
+        step_text = [_tool_step_to_text(s) for s in steps]
+        return " | ".join(step_text) if step_text else "Plan complete."
+    elif category == "physics_reasoning":
+        return task_dict.get("ground_truth", "")
     return ""
 
 
@@ -573,14 +611,14 @@ def main() -> None:
 
     # Save raw results
     raw_path = os.path.join(cfg["paths"]["outputs"], f"raw_results_{run_suffix}.json")
-    with open(raw_path, "w") as f:
+    with open(raw_path, "w", encoding="utf-8") as f:
         json.dump(all_raw_results, f, indent=2)
 
     # Save failure report separately (used by finetune/dataset_builder.py)
     failure_path = os.path.join(
         cfg["paths"]["outputs"], f"failure_report_{run_suffix}.json"
     )
-    with open(failure_path, "w") as f:
+    with open(failure_path, "w", encoding="utf-8") as f:
         json.dump(metrics["failure_report"], f, indent=2)
 
     # Save run manifest for reproducibility and debugging.
@@ -646,9 +684,9 @@ def main() -> None:
         (failure_path, cfg["paths"]["failure_report"]),
         (manifest_path, os.path.join(cfg["paths"]["outputs"], "run_manifest.json")),
     ]:
-        with open(src) as f_in:
+        with open(src, encoding="utf-8") as f_in:
             data = f_in.read()
-        with open(dst, "w") as f_out:
+        with open(dst, "w", encoding="utf-8") as f_out:
             f_out.write(data)
 
     # ── Print summary ─────────────────────────────────────────

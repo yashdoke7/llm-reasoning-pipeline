@@ -20,7 +20,9 @@ sys.path.insert(0, str(_ROOT))
 import yaml
 
 
-def infer_category_from_text(text: str) -> str:
+def infer_category_from_text(text: str, explicit_category: str | None = None) -> str:
+    if explicit_category:
+        return explicit_category
     t = text.lower()
     if "<|user|>\nproblem:" in t:
         return "multistep_arithmetic"
@@ -30,6 +32,8 @@ def infer_category_from_text(text: str) -> str:
         return "tool_use_planning"
     if "<|user|>\nconsider this hypothetical premise" in t:
         return "causal_counterfactual"
+    if "physics" in t and "<|user|>\nproblem:" in t:
+        return "physics_reasoning"
     return "unknown"
 
 
@@ -59,6 +63,7 @@ def main() -> None:
         "factual_consistency": 0,
         "tool_use_planning": 0,
         "causal_counterfactual": 0,
+        "physics_reasoning": 0,
         "unknown": 0,
     }
 
@@ -70,7 +75,10 @@ def main() -> None:
                 continue
             row = json.loads(line)
             total += 1
-            cat = infer_category_from_text(row.get("text", ""))
+            cat = infer_category_from_text(
+                row.get("text", ""),
+                explicit_category=row.get("category"),
+            )
             counts[cat] = counts.get(cat, 0) + 1
 
     print("=" * 64)
@@ -91,6 +99,7 @@ def main() -> None:
         "factual_consistency",
         "tool_use_planning",
         "causal_counterfactual",
+        "physics_reasoning",
         "unknown",
     ]:
         n = counts.get(cat, 0)

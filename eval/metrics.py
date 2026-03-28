@@ -235,7 +235,7 @@ class MetricsAggregator:
 
         if output_path:
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            with open(output_path, "w") as f:
+            with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(result, f, indent=2)
             logger.info(f"Metrics saved to {output_path}")
 

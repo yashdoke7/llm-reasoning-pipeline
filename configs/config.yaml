@@ -94,6 +94,8 @@ eval:
     - "factual_consistency"
     - "tool_use_planning"
     - "causal_counterfactual"
+    # Optional specialized benchmark:
+    # - "physics_reasoning"
 
 # ── Dataset Settings ──────────────────────────────────────────
 datasets:
@@ -129,6 +131,12 @@ datasets:
       - "world_war_ii"
       - "quantum_computing"
       - "space_exploration"
+
+  physics:
+    # Optional custom physics benchmark JSONL (one item per line).
+    # Fields: id, question/problem/prompt, ground_truth/final_answer/answer
+    path: "data_loaders/data/physics_eval.jsonl"
+    max_samples: 60
 
 # ── Dataset Generation Settings ───────────────────────────────
 # Run: python data_loaders/generate_eval_datasets.py

@@ -237,7 +237,12 @@ def load_factual_synthetic(
     """
     resolved = cache_path or _CACHE_PATH
 
-    # Check for generated JSONL first
+    # Respect explicit JSONL path first (if provided in config/CLI).
+    if use_cache and resolved.endswith(".jsonl") and os.path.exists(resolved):
+        logger.info(f"Loading factual tasks from configured JSONL: {resolved}")
+        return _load_jsonl(resolved, max_samples)
+
+    # Otherwise, fall back to the default generated JSONL location.
     generated_path = os.path.join(_HERE, "data", "generated_factual.jsonl")
     if use_cache and os.path.exists(generated_path):
         logger.info(f"Loading generated factual tasks from {generated_path}")
