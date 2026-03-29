@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import random
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -93,7 +94,7 @@ def _is_correct_trace(
 ) -> bool:
     if not ground_truth:
         return True
-    _, final_answer = parse_reasoning_trace(raw_response)
+    _, final_answer = parse_reasoning_trace(raw_response, category=category)
     if not final_answer:
         return False
 
@@ -158,6 +159,23 @@ def _is_correct_trace(
             return False
 
     return False
+
+
+def _ensure_final_answer_format(raw_response: str, category: str) -> str:
+    """
+    Normalize generated traces so assistant targets always include an explicit
+    'Final Answer: ...' footer, which stabilizes evaluation/parsing.
+    """
+    text = (raw_response or "").strip()
+    if not text:
+        return text
+    if re.search(r"Final\s+Answer\s*[:\-]", text, flags=re.IGNORECASE):
+        return text
+
+    _, final_answer = parse_reasoning_trace(text, category=category)
+    if not final_answer:
+        return text
+    return f"{text}\n\nFinal Answer: {final_answer}"
 
 
 def _load_json(path: str) -> dict:
@@ -466,8 +484,10 @@ def build_dataset(
                     logger.warning(f"[{task_id}] Generation error: {last_error}")
                     continue
 
+                normalized_raw = _ensure_final_answer_format(raw, real_cat)
+
                 if apply_correctness_filter and gt and not _is_correct_trace(
-                    raw,
+                    normalized_raw,
                     gt,
                     real_cat,
                     quality_client=quality_client,
@@ -479,7 +499,7 @@ def build_dataset(
                 example = _format_training_example(
                     system=_TRACE_GEN_SYSTEM,
                     user_prompt=user_prompt,
-                    assistant_response=raw.strip(),
+                    assistant_response=normalized_raw,
                     category=real_cat,
                     source=source,
                 )

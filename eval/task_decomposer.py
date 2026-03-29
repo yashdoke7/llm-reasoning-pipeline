@@ -130,6 +130,10 @@ _STEP_PATTERN = re.compile(
     r"(?:^|\n)\s*(?:Step\s+)?(\d+)[.:)]\s*(.+?)(?=\n\s*(?:Step\s+)?\d+[.:)]|\n\s*Final Answer|$)",
     re.DOTALL | re.IGNORECASE,
 )
+_QA_STEP_PATTERN = re.compile(
+    r"(?:^|\n)\s*(?:[-*]\s*)?Q(\d+)\s*[:\-]\s*(.+?)(?=\n\s*(?:[-*]\s*)?Q\d+\s*[:\-]|\n\s*Final\s+Answer|$)",
+    re.DOTALL | re.IGNORECASE,
+)
 _FINAL_ANSWER_PATTERN = re.compile(
     r"Final\s+Answer\s*[:\-]?\s*(.+?)$",
     re.IGNORECASE | re.DOTALL,
@@ -182,7 +186,68 @@ def _extract_final_answer(raw: str) -> str:
     return ""
 
 
-def parse_reasoning_trace(raw: str) -> tuple[list[ReasoningStep], str]:
+def _extract_factual_qa_summary(raw: str) -> str:
+    """
+    Build a consolidated factual answer from Q1/Q2/... style outputs.
+    Handles forms like:
+      - Q1: <answer>
+      - Q1: <question> / Answer: <answer>
+      - \\boxed{a} \\boxed{b} ... (fallback)
+    """
+    def _clean(text: str) -> str:
+        t = text.strip()
+        if t.startswith(r"\text{") and t.endswith("}"):
+            t = t[6:-1].strip()
+        return t
+
+    def _looks_like_question(text: str) -> bool:
+        t = text.strip().lower()
+        if not t:
+            return False
+        if t.endswith("?"):
+            return True
+        prefixes = (
+            "what ", "when ", "where ", "which ", "who ", "whose ", "whom ",
+            "why ", "how ", "is ", "are ", "do ", "does ", "did ", "can ",
+            "could ", "would ", "should ",
+        )
+        return any(t.startswith(p) for p in prefixes)
+
+    by_q: dict[int, str] = {}
+    current_q: Optional[int] = None
+
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        q_line = re.match(r"^(?:[-*]\s*)?Q(\d+)\s*[:\-]\s*(.+?)\s*$", stripped, re.IGNORECASE)
+        if q_line:
+            current_q = int(q_line.group(1))
+            payload = _clean(q_line.group(2))
+            if payload and not _looks_like_question(payload):
+                by_q[current_q] = payload
+            continue
+
+        ans_line = re.match(r"^(?:Answer|Ans)\s*[:\-]\s*(.+?)\s*$", stripped, re.IGNORECASE)
+        if ans_line and current_q is not None:
+            payload = _clean(ans_line.group(1))
+            if payload:
+                by_q[current_q] = payload
+            continue
+
+    # Fallback: if model only emits boxed multi-part answers
+    if len(by_q) < 2:
+        boxed = [_clean(x) for x in _BOXED_PATTERN.findall(raw) if _clean(x)]
+        if len(boxed) >= 2:
+            by_q = {i + 1: ans for i, ans in enumerate(boxed)}
+
+    if len(by_q) < 2:
+        return ""
+    return "; ".join(f"Q{k}: {by_q[k]}" for k in sorted(by_q))
+
+
+def parse_reasoning_trace(raw: str, category: Optional[str] = None) -> tuple[list[ReasoningStep], str]:
     """
     Parse a raw LLM reasoning trace into discrete steps and a final answer.
 
@@ -201,13 +266,21 @@ def parse_reasoning_trace(raw: str) -> tuple[list[ReasoningStep], str]:
     else:
         text_for_steps = raw
 
-    # Extract numbered steps
+    # Extract numbered Step N blocks
     steps = []
     for match in _STEP_PATTERN.finditer(text_for_steps):
         idx = int(match.group(1))
         text = match.group(2).strip()
         if text:
             steps.append(ReasoningStep(index=idx, text=text))
+
+    # Factual tasks often use Q1:/Q2:/... instead of Step 1:/Step 2:
+    if not steps and category == "factual_consistency":
+        for i, match in enumerate(_QA_STEP_PATTERN.finditer(text_for_steps), start=1):
+            q_idx = int(match.group(1))
+            text = match.group(2).strip()
+            if text:
+                steps.append(ReasoningStep(index=i, text=f"Q{q_idx}: {text}"))
 
     # If no numbered steps found, try splitting by newlines as fallback
     if not steps:
@@ -216,6 +289,12 @@ def parse_reasoning_trace(raw: str) -> tuple[list[ReasoningStep], str]:
         lines = [l for l in lines if len(l) > 20]
         steps = [ReasoningStep(index=i + 1, text=l) for i, l in enumerate(lines)]
         logger.debug("Step parsing fallback: split by newlines")
+
+    # For factual tasks, prefer consolidated multi-answer extraction.
+    if category == "factual_consistency":
+        factual_summary = _extract_factual_qa_summary(raw)
+        if factual_summary:
+            final_answer = factual_summary
 
     # Mark the last step as final if no explicit Final Answer
     if steps and not final_answer:
@@ -284,7 +363,7 @@ class TaskDecomposer:
         """
         task.raw_response = raw_response
         try:
-            steps, final_answer = parse_reasoning_trace(raw_response)
+            steps, final_answer = parse_reasoning_trace(raw_response, category=task.category)
             task.steps = steps
             task.final_answer = final_answer
             if len(steps) < 1:
