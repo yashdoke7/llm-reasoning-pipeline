@@ -29,6 +29,15 @@ data_loaders/data/gsm8k_cache/
 data_loaders/data/factual_synthetic.json
 data_loaders/data/finetune_dataset.jsonl
 data_loaders/data/crass_dataset.csv
+data_loaders/data/finetune_dataset*.jsonl
+data_loaders/data/ft_*.jsonl
+
+# Local backups / scratch
+configs/config*_backup.yaml
+tmp_*
+tmp_eval_extract/
+compare_arith.py
+debug_answers.py
 
 # OS
 .DS_Store
