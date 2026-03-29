@@ -1,0 +1,249 @@
+[
+  {
+    "goal": "Find the latest news about renewable energy and summarize it",
+    "available_tools": [
+      {"name": "search_web", "description": "Search the web", "params": ["query"]},
+      {"name": "summarize_text", "description": "Summarize text", "params": ["text"]}
+    ],
+    "constraints": ["Use only top 3 results", "Summary under 100 words"],
+    "correct_plan": [
+      {"tool": "search_web", "params": {"query": "latest renewable energy news 2026"}},
+      {"tool": "summarize_text", "params": {"text": "top 3 results content"}}
+    ]
+  },
+  {
+    "goal": "Download a CSV file and compute average sales",
+    "available_tools": [
+      {"name": "download_url", "description": "Download file", "params": ["url"]},
+      {"name": "compute_stats", "description": "Compute statistics", "params": ["data", "operation"]}
+    ],
+    "constraints": ["Use only 'sales' column", "Return mean only"],
+    "correct_plan": [
+      {"tool": "download_url", "params": {"url": "https://example.com/sales.csv"}},
+      {"tool": "compute_stats", "params": {"data": "sales.csv:sales", "operation": "mean"}}
+    ]
+  },
+  {
+    "goal": "Translate a paragraph from English to French and save it",
+    "available_tools": [
+      {"name": "translate_text", "description": "Translate text", "params": ["text", "target_language"]},
+      {"name": "write_file", "description": "Write to file", "params": ["path", "content"]}
+    ],
+    "constraints": ["Preserve formatting", "Save as .txt"],
+    "correct_plan": [
+      {"tool": "translate_text", "params": {"text": "input paragraph", "target_language": "French"}},
+      {"tool": "write_file", "params": {"path": "translated.txt", "content": "translated paragraph"}}
+    ]
+  },
+  {
+    "goal": "Extract text from a PDF and summarize key points",
+    "available_tools": [
+      {"name": "parse_pdf", "description": "Extract PDF text", "params": ["file_path"]},
+      {"name": "summarize_text", "description": "Summarize text", "params": ["text"]}
+    ],
+    "constraints": ["Summary under 150 words", "Use full document"],
+    "correct_plan": [
+      {"tool": "parse_pdf", "params": {"file_path": "report.pdf"}},
+      {"tool": "summarize_text", "params": {"text": "parsed text"}}
+    ]
+  },
+  {
+    "goal": "Query user database and send email to top users",
+    "available_tools": [
+      {"name": "query_database", "description": "Query DB", "params": ["query"]},
+      {"name": "send_email", "description": "Send email", "params": ["to", "subject", "body"]}
+    ],
+    "constraints": ["Select top 5 users", "Email must include score"],
+    "correct_plan": [
+      {"tool": "query_database", "params": {"query": "SELECT email, score FROM users ORDER BY score DESC LIMIT 5"}},
+      {"tool": "send_email", "params": {"to": "top5 emails", "subject": "Top Users", "body": "scores included"}}
+    ]
+  },
+  {
+    "goal": "Generate chart from dataset",
+    "available_tools": [
+      {"name": "read_file", "description": "Read file", "params": ["path"]},
+      {"name": "create_chart", "description": "Create chart", "params": ["data", "type"]}
+    ],
+    "constraints": ["Use line chart", "Use full dataset"],
+    "correct_plan": [
+      {"tool": "read_file", "params": {"path": "data.csv"}},
+      {"tool": "create_chart", "params": {"data": "data.csv", "type": "line"}}
+    ]
+  },
+  {
+    "goal": "Fetch API weather data and save locally",
+    "available_tools": [
+      {"name": "api_call", "description": "Call API", "params": ["endpoint"]},
+      {"name": "write_file", "description": "Write file", "params": ["path", "content"]}
+    ],
+    "constraints": ["Save JSON format", "Include timestamp"],
+    "correct_plan": [
+      {"tool": "api_call", "params": {"endpoint": "https://api.weather.com/current"}},
+      {"tool": "write_file", "params": {"path": "weather.json", "content": "api response"}}
+    ]
+  },
+  {
+    "goal": "Search Python tutorials and email summary",
+    "available_tools": [
+      {"name": "search_web", "description": "Search", "params": ["query"]},
+      {"name": "summarize_text", "description": "Summarize", "params": ["text"]},
+      {"name": "send_email", "description": "Email", "params": ["to", "subject", "body"]}
+    ],
+    "constraints": ["Use 2 sources", "Summary < 120 words"],
+    "correct_plan": [
+      {"tool": "search_web", "params": {"query": "best Python tutorials"}},
+      {"tool": "summarize_text", "params": {"text": "top 2 tutorials"}},
+      {"tool": "send_email", "params": {"to": "user@example.com", "subject": "Python Tutorials", "body": "summary"}}
+    ]
+  },
+
+  {
+    "goal": "Run Python script to clean data and save result",
+    "available_tools": [
+      {"name": "run_python", "description": "Execute Python", "params": ["code"]},
+      {"name": "write_file", "description": "Write file", "params": ["path", "content"]}
+    ],
+    "constraints": ["Remove null values", "Save CSV"],
+    "correct_plan": [
+      {"tool": "run_python", "params": {"code": "clean dataframe dropna"}},
+      {"tool": "write_file", "params": {"path": "cleaned.csv", "content": "cleaned data"}}
+    ]
+  },
+
+  {
+    "goal": "Download PDF, extract and translate to Spanish",
+    "available_tools": [
+      {"name": "download_url", "description": "Download", "params": ["url"]},
+      {"name": "parse_pdf", "description": "Parse", "params": ["file_path"]},
+      {"name": "translate_text", "description": "Translate", "params": ["text", "target_language"]}
+    ],
+    "constraints": ["Translate full text", "Keep formatting"],
+    "correct_plan": [
+      {"tool": "download_url", "params": {"url": "https://example.com/doc.pdf"}},
+      {"tool": "parse_pdf", "params": {"file_path": "doc.pdf"}},
+      {"tool": "translate_text", "params": {"text": "parsed text", "target_language": "Spanish"}}
+    ]
+  }, 
+  
+  {
+    "goal": "Search for recent AI research papers and summarize abstracts",
+    "available_tools": [
+      {"name": "search_web", "description": "Search the web", "params": ["query"]},
+      {"name": "summarize_text", "description": "Summarize text", "params": ["text"]}
+    ],
+    "constraints": ["Use top 5 papers", "Summary under 200 words"],
+    "correct_plan": [
+      {"tool": "search_web", "params": {"query": "latest AI research papers 2026"}},
+      {"tool": "summarize_text", "params": {"text": "abstracts of top 5 papers"}}
+    ]
+  },
+  {
+    "goal": "Read a log file and compute error frequency",
+    "available_tools": [
+      {"name": "read_file", "description": "Read file", "params": ["path"]},
+      {"name": "compute_stats", "description": "Compute statistics", "params": ["data", "operation"]}
+    ],
+    "constraints": ["Count only ERROR entries", "Return frequency"],
+    "correct_plan": [
+      {"tool": "read_file", "params": {"path": "logs.txt"}},
+      {"tool": "compute_stats", "params": {"data": "logs.txt:ERROR", "operation": "count"}}
+    ]
+  },
+  {
+    "goal": "Query sales database and create bar chart",
+    "available_tools": [
+      {"name": "query_database", "description": "Query DB", "params": ["query"]},
+      {"name": "create_chart", "description": "Create chart", "params": ["data", "type"]}
+    ],
+    "constraints": ["Group by product", "Use bar chart"],
+    "correct_plan": [
+      {"tool": "query_database", "params": {"query": "SELECT product, SUM(sales) FROM sales GROUP BY product"}},
+      {"tool": "create_chart", "params": {"data": "query result", "type": "bar"}}
+    ]
+  },
+  {
+    "goal": "Download JSON data and run analysis using Python",
+    "available_tools": [
+      {"name": "download_url", "description": "Download file", "params": ["url"]},
+      {"name": "run_python", "description": "Run Python", "params": ["code"]}
+    ],
+    "constraints": ["Analyze key 'revenue'", "Return average"],
+    "correct_plan": [
+      {"tool": "download_url", "params": {"url": "https://example.com/data.json"}},
+      {"tool": "run_python", "params": {"code": "load json and compute average revenue"}}
+    ]
+  },
+  {
+    "goal": "Translate user reviews and summarize sentiment",
+    "available_tools": [
+      {"name": "translate_text", "description": "Translate", "params": ["text", "target_language"]},
+      {"name": "summarize_text", "description": "Summarize", "params": ["text"]}
+    ],
+    "constraints": ["Translate to English", "Summary under 80 words"],
+    "correct_plan": [
+      {"tool": "translate_text", "params": {"text": "user reviews", "target_language": "English"}},
+      {"tool": "summarize_text", "params": {"text": "translated reviews"}}
+    ]
+  },
+  {
+    "goal": "Extract PDF data and store key points in file",
+    "available_tools": [
+      {"name": "parse_pdf", "description": "Parse PDF", "params": ["file_path"]},
+      {"name": "write_file", "description": "Write file", "params": ["path", "content"]}
+    ],
+    "constraints": ["Extract bullet points", "Save as notes.txt"],
+    "correct_plan": [
+      {"tool": "parse_pdf", "params": {"file_path": "paper.pdf"}},
+      {"tool": "write_file", "params": {"path": "notes.txt", "content": "bullet points"}}
+    ]
+  },
+  {
+    "goal": "Schedule weekly report email",
+    "available_tools": [
+      {"name": "schedule_task", "description": "Schedule task", "params": ["task", "time"]},
+      {"name": "send_email", "description": "Send email", "params": ["to", "subject", "body"]}
+    ],
+    "constraints": ["Schedule every Monday 9 AM", "Include report attachment"],
+    "correct_plan": [
+      {"tool": "schedule_task", "params": {"task": "send weekly report email", "time": "Monday 09:00"}},
+      {"tool": "send_email", "params": {"to": "team@example.com", "subject": "Weekly Report", "body": "attached report"}}
+    ]
+  },
+  {
+    "goal": "Fetch stock data via API and compute statistics",
+    "available_tools": [
+      {"name": "api_call", "description": "Call API", "params": ["endpoint"]},
+      {"name": "compute_stats", "description": "Compute stats", "params": ["data", "operation"]}
+    ],
+    "constraints": ["Compute max price", "Use last 30 days"],
+    "correct_plan": [
+      {"tool": "api_call", "params": {"endpoint": "https://api.stocks.com/prices?range=30d"}},
+      {"tool": "compute_stats", "params": {"data": "price data", "operation": "max"}}
+    ]
+  },
+  {
+    "goal": "Search for recipes and save best one",
+    "available_tools": [
+      {"name": "search_web", "description": "Search web", "params": ["query"]},
+      {"name": "write_file", "description": "Write file", "params": ["path", "content"]}
+    ],
+    "constraints": ["Pick highest rated recipe", "Save as recipe.txt"],
+    "correct_plan": [
+      {"tool": "search_web", "params": {"query": "best pasta recipe"}},
+      {"tool": "write_file", "params": {"path": "recipe.txt", "content": "best recipe"}}
+    ]
+  },
+  {
+    "goal": "Read CSV and create pie chart",
+    "available_tools": [
+      {"name": "read_file", "description": "Read file", "params": ["path"]},
+      {"name": "create_chart", "description": "Create chart", "params": ["data", "type"]}
+    ],
+    "constraints": ["Use category column", "Chart type pie"],
+    "correct_plan": [
+      {"tool": "read_file", "params": {"path": "data.csv"}},
+      {"tool": "create_chart", "params": {"data": "data.csv:category", "type": "pie"}}
+    ]
+  }
+]

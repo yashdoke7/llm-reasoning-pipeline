@@ -1,0 +1,202 @@
+[
+  {
+    "premise": "If the Earth had no magnetic field, solar winds would directly interact with the atmosphere.",
+    "question": "What would likely happen to Earth's atmosphere over time?",
+    "correct_answer": "The atmosphere would gradually erode due to solar wind stripping, reducing its density and possibly making the planet less habitable.",
+    "distractors": [
+      "The atmosphere would become thicker due to solar compression.",
+      "Solar winds would have no long-term impact on atmospheric composition.",
+      "The atmosphere would turn into solid layers due to radiation."
+    ]
+  },
+  {
+    "premise": "If transistors had never been invented, modern electronics would rely on vacuum tubes.",
+    "question": "How would this affect computing technology today?",
+    "correct_answer": "Computers would be much larger, less efficient, and consume significantly more power, limiting widespread adoption.",
+    "distractors": [
+      "Computers would be smaller due to simpler design.",
+      "Processing speeds would be higher due to analog precision.",
+      "Energy consumption would be negligible compared to today."
+    ]
+  },
+  {
+    "premise": "If the printing press had not been invented in the 15th century, knowledge dissemination would remain manual.",
+    "question": "What impact would this have on scientific progress?",
+    "correct_answer": "Scientific progress would slow significantly due to limited information sharing and reduced collaboration.",
+    "distractors": [
+      "Scientific progress would accelerate due to exclusivity.",
+      "Knowledge would spread faster through oral traditions.",
+      "Science would become more accurate due to fewer publications."
+    ]
+  },
+  {
+    "premise": "If antibiotics were ineffective against bacteria, infections would not be easily treatable.",
+    "question": "What would be the consequence for global health?",
+    "correct_answer": "Mortality rates from bacterial infections would remain high, significantly reducing life expectancy.",
+    "distractors": [
+      "Viruses would become the primary cause of all diseases.",
+      "Human immunity would instantly adapt to all bacteria.",
+      "Healthcare costs would decrease due to fewer treatments."
+    ]
+  },
+  {
+    "premise": "If the internet had strict global censorship from its inception, information flow would be restricted.",
+    "question": "How would this affect innovation?",
+    "correct_answer": "Innovation would slow due to limited access to diverse ideas and reduced global collaboration.",
+    "distractors": [
+      "Innovation would accelerate due to centralized control.",
+      "Startups would increase due to less competition.",
+      "Knowledge would become more accurate globally."
+    ]
+  },
+  {
+    "premise": "If photosynthesis did not produce oxygen, Earth's atmosphere would lack free oxygen.",
+    "question": "What would this imply for complex life?",
+    "correct_answer": "Complex aerobic life would not evolve, as oxygen is essential for high-energy metabolism.",
+    "distractors": [
+      "Complex life would evolve faster without oxygen.",
+      "Oxygen would be replaced by nitrogen for respiration.",
+      "Life would rely on sunlight directly for energy storage."
+    ]
+  },
+  {
+    "premise": "If the Industrial Revolution occurred 500 years earlier, mechanization would begin in medieval times.",
+    "question": "How would this affect global economic structures?",
+    "correct_answer": "Feudal systems would likely collapse earlier, giving rise to capitalist economies sooner.",
+    "distractors": [
+      "Feudalism would strengthen due to increased productivity.",
+      "Trade would decrease as machines replace markets.",
+      "Agriculture would disappear entirely."
+    ]
+  },
+  {
+    "premise": "If Moore’s Law had plateaued in the 1990s, computing power growth would slow.",
+    "question": "What would be the impact on AI development?",
+    "correct_answer": "AI progress would be significantly delayed due to limited computational resources.",
+    "distractors": [
+      "AI would advance faster due to algorithmic efficiency alone.",
+      "AI would not require computing power at all.",
+      "Hardware limitations would have no impact on AI."
+    ]
+  },
+  {
+    "premise": "If vaccines caused severe harm universally, public trust in medicine would collapse.",
+    "question": "What would happen to disease outbreaks?",
+    "correct_answer": "Disease outbreaks would increase due to low immunization rates and lack of herd immunity.",
+    "distractors": [
+      "Diseases would disappear due to natural immunity.",
+      "Vaccines would still be widely adopted.",
+      "Pathogens would evolve to become harmless."
+    ]
+  },
+  {
+    "premise": "If fossil fuels were never discovered, energy systems would rely on renewables earlier.",
+    "question": "What would be the likely environmental outcome?",
+    "correct_answer": "Global carbon emissions would be lower, reducing the extent of climate change.",
+    "distractors": [
+      "Climate change would worsen due to lack of energy.",
+      "Renewables would not be developed at all.",
+      "Industrialization would increase emissions anyway."
+    ]
+  },
+  {
+    "premise": "If the Cold War had escalated into nuclear conflict, major global destruction would occur.",
+    "question": "What would be the likely long-term global impact?",
+    "correct_answer": "Global population and infrastructure would decline drastically, with long-term environmental damage.",
+    "distractors": [
+      "Economic growth would accelerate post-conflict.",
+      "Technology development would halt permanently.",
+      "Climate would stabilize immediately."
+    ]
+  },
+  {
+    "premise": "If humans had perfect memory retention, forgetting would not occur.",
+    "question": "How would this affect learning processes?",
+    "correct_answer": "Learning might become less efficient due to cognitive overload and difficulty prioritizing relevant information.",
+    "distractors": [
+      "Learning would be unnecessary.",
+      "Creativity would disappear entirely.",
+      "All knowledge would become identical across individuals."
+    ]
+  },
+  {
+    "premise": "If supply chains were entirely localized, global trade would be minimal.",
+    "question": "What would happen to product diversity?",
+    "correct_answer": "Product diversity would decrease as regions rely only on locally available resources.",
+    "distractors": [
+      "Product diversity would increase globally.",
+      "Costs would drop universally.",
+      "All countries would produce identical goods."
+    ]
+  },
+  {
+    "premise": "If evolution operated without genetic mutations, variation would be absent.",
+    "question": "What would be the consequence for species adaptation?",
+    "correct_answer": "Species would struggle to adapt to changing environments, leading to higher extinction rates.",
+    "distractors": [
+      "Species would evolve faster through selection alone.",
+      "Adaptation would occur through environmental memory.",
+      "All species would become identical."
+    ]
+  },
+  {
+    "premise": "If blockchain technology were invented in the 1980s, before the internet scaled.",
+    "question": "What would be the impact on its adoption?",
+    "correct_answer": "Adoption would be limited due to lack of supporting infrastructure and network connectivity.",
+    "distractors": [
+      "It would replace all banking instantly.",
+      "It would have no technical challenges.",
+      "It would eliminate the need for computers."
+    ]
+  },
+  {
+    "premise": "If gravity on Earth were twice as strong, physical forces would increase.",
+    "question": "How would this affect human physiology?",
+    "correct_answer": "Humans would likely be shorter and stronger, with increased strain on bones and muscles.",
+    "distractors": [
+      "Humans would grow taller and lighter.",
+      "Gravity would not affect biology.",
+      "Humans would be able to fly naturally."
+    ]
+  },
+  {
+    "premise": "If the US had not entered World War II, Allied forces would lack major support.",
+    "question": "What would likely happen to the war outcome?",
+    "correct_answer": "The war could have prolonged significantly or resulted in a different geopolitical balance.",
+    "distractors": [
+      "The war would end immediately.",
+      "Axis powers would surrender earlier.",
+      "The war would have no global impact."
+    ]
+  },
+  {
+    "premise": "If cloud computing did not exist, data storage would remain local.",
+    "question": "How would this affect scalability of applications?",
+    "correct_answer": "Scalability would be limited due to hardware constraints and higher infrastructure costs.",
+    "distractors": [
+      "Applications would scale infinitely.",
+      "Costs would decrease drastically.",
+      "Data would become universally accessible."
+    ]
+  },
+  {
+    "premise": "If urbanization reversed globally, people would move to rural areas.",
+    "question": "What would happen to economic productivity?",
+    "correct_answer": "Productivity might decline due to reduced access to centralized resources and infrastructure.",
+    "distractors": [
+      "Productivity would instantly double.",
+      "Cities would expand further.",
+      "All industries would become automated."
+    ]
+  },
+  {
+    "premise": "If DNA replication had no proofreading mechanism, mutation rates would increase.",
+    "question": "What would be the biological consequence?",
+    "correct_answer": "Higher mutation rates would lead to more genetic disorders and instability in organisms.",
+    "distractors": [
+      "All mutations would be beneficial.",
+      "Organisms would stop evolving.",
+      "DNA would become perfectly stable."
+    ]
+  }
+]

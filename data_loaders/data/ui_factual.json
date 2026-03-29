@@ -1,0 +1,322 @@
+[
+  {
+    "topic": "History - French Revolution",
+    "context": "The French Revolution began in 1789 in France due to economic crisis and social inequality. King Louis XVI was the monarch at the time. The Estates-General was convened in May 1789 to address financial issues. On July 14, 1789, the Bastille prison was stormed by revolutionaries. This event became a symbol of the revolution. The monarchy was eventually abolished in 1792.",
+    "questions": [
+      "In what year did the French Revolution begin?",
+      "Who was the king of France at the start of the revolution?",
+      "What significant event happened on July 14, 1789?",
+      "When was the monarchy abolished?"
+    ],
+    "answers": [
+      "1789",
+      "Louis XVI",
+      "Storming of the Bastille",
+      "1792"
+    ]
+  },
+  {
+    "topic": "Science - Photosynthesis",
+    "context": "Photosynthesis is the process by which plants convert light energy into chemical energy. It occurs mainly in the chloroplasts of plant cells. The primary pigment involved is chlorophyll. The process uses carbon dioxide and water to produce glucose and oxygen. Sunlight provides the energy needed for the reaction. The general equation includes CO2, H2O, and light.",
+    "questions": [
+      "Where does photosynthesis mainly occur?",
+      "What pigment is involved in photosynthesis?",
+      "What are the main inputs of photosynthesis?",
+      "What gas is produced during photosynthesis?"
+    ],
+    "answers": [
+      "Chloroplasts",
+      "Chlorophyll",
+      "Carbon dioxide and water",
+      "Oxygen"
+    ]
+  },
+  {
+    "topic": "Geography - Mount Everest",
+    "context": "Mount Everest is the highest mountain on Earth, located in the Himalayas. It lies on the border between Nepal and China. Its height is approximately 8848.86 meters above sea level. The first successful ascent was achieved on May 29, 1953. Sir Edmund Hillary and Tenzing Norgay were the climbers. Everest is part of the Mahalangur range.",
+    "questions": [
+      "What is the height of Mount Everest?",
+      "Between which two countries is Mount Everest located?",
+      "When was the first successful ascent?",
+      "Who were the climbers?"
+    ],
+    "answers": [
+      "8848.86 meters",
+      "Nepal and China",
+      "May 29, 1953",
+      "Edmund Hillary and Tenzing Norgay"
+    ]
+  },
+  {
+    "topic": "Biology - Human Heart",
+    "context": "The human heart is a muscular organ responsible for pumping blood. It has four chambers: two atria and two ventricles. The right side of the heart pumps deoxygenated blood to the lungs. The left side pumps oxygenated blood to the body. The heart beats about 60 to 100 times per minute in a resting adult. It is located slightly to the left of the center of the chest.",
+    "questions": [
+      "How many chambers does the human heart have?",
+      "Which side pumps oxygenated blood?",
+      "What is the normal resting heart rate range?",
+      "Where is the heart located?"
+    ],
+    "answers": [
+      "Four",
+      "Left side",
+      "60 to 100 beats per minute",
+      "Slightly left of the center of the chest"
+    ]
+  },
+  {
+    "topic": "Economics - Inflation",
+    "context": "Inflation refers to the increase in the general price level of goods and services. It reduces the purchasing power of money over time. Inflation is often measured using indices like the Consumer Price Index (CPI). Central banks may adjust interest rates to control inflation. Moderate inflation is considered normal in growing economies. Hyperinflation occurs when prices rise extremely rapidly.",
+    "questions": [
+      "What does inflation measure?",
+      "Which index is commonly used to measure inflation?",
+      "What happens to purchasing power during inflation?",
+      "What do central banks adjust to control inflation?"
+    ],
+    "answers": [
+      "Increase in general price level",
+      "Consumer Price Index",
+      "It decreases",
+      "Interest rates"
+    ]
+  },
+  {
+    "topic": "Computing - Python",
+    "context": "Python is a high-level programming language created by Guido van Rossum. It was first released in 1991. Python emphasizes readability and simplicity. It supports multiple programming paradigms including procedural, object-oriented, and functional programming. Python is widely used in web development, data science, and machine learning. Its syntax uses indentation to define code blocks.",
+    "questions": [
+      "Who created Python?",
+      "When was Python first released?",
+      "What feature defines Python's code blocks?",
+      "Name one paradigm Python supports."
+    ],
+    "answers": [
+      "Guido van Rossum",
+      "1991",
+      "Indentation",
+      "Object-oriented programming"
+    ]
+  }, 
+  {
+    "topic": "History - American Independence",
+    "context": "The United States declared independence from Great Britain on July 4, 1776. The Declaration of Independence was primarily written by Thomas Jefferson. It was adopted by the Continental Congress in Philadelphia. At the time, there were 13 American colonies. The document outlined grievances against King George III. Independence led to the American Revolutionary War.",
+    "questions": [
+      "On what date was independence declared?",
+      "Who primarily wrote the Declaration of Independence?",
+      "How many colonies were there?",
+      "Which king was mentioned in the grievances?"
+    ],
+    "answers": [
+      "July 4, 1776",
+      "Thomas Jefferson",
+      "13",
+      "King George III"
+    ]
+  },
+  {
+    "topic": "Physics - Newton's Laws",
+    "context": "Isaac Newton proposed three laws of motion in 1687. These laws describe the relationship between force and motion. The first law is known as the law of inertia. The second law relates force, mass, and acceleration. The third law states that every action has an equal and opposite reaction. These laws are fundamental to classical mechanics.",
+    "questions": [
+      "How many laws did Newton propose?",
+      "When were the laws introduced?",
+      "What is the first law called?",
+      "What does the third law state?"
+    ],
+    "answers": [
+      "Three",
+      "1687",
+      "Law of inertia",
+      "Every action has an equal and opposite reaction"
+    ]
+  },
+  {
+    "topic": "Chemistry - Periodic Table",
+    "context": "The periodic table organizes elements based on atomic number. It was first developed by Dmitri Mendeleev in 1869. Elements are arranged in rows called periods and columns called groups. There are currently 118 confirmed elements. Elements in the same group share similar chemical properties. The table helps predict element behavior.",
+    "questions": [
+      "Who developed the periodic table?",
+      "In which year was it first developed?",
+      "How many confirmed elements are there?",
+      "What are columns in the table called?"
+    ],
+    "answers": [
+      "Dmitri Mendeleev",
+      "1869",
+      "118",
+      "Groups"
+    ]
+  },
+  {
+    "topic": "Astronomy - Solar System",
+    "context": "The solar system consists of the Sun and objects orbiting it. There are eight recognized planets. Earth is the third planet from the Sun. Jupiter is the largest planet in the system. The asteroid belt lies between Mars and Jupiter. The solar system formed about 4.6 billion years ago.",
+    "questions": [
+      "How many planets are in the solar system?",
+      "Which planet is third from the Sun?",
+      "Which is the largest planet?",
+      "Where is the asteroid belt located?"
+    ],
+    "answers": [
+      "Eight",
+      "Earth",
+      "Jupiter",
+      "Between Mars and Jupiter"
+    ]
+  },
+  {
+    "topic": "Biology - DNA",
+    "context": "DNA stands for deoxyribonucleic acid. It carries genetic information in living organisms. The structure of DNA is a double helix. It is composed of nucleotides. Each nucleotide contains a sugar, phosphate group, and a base. The four bases are adenine, thymine, cytosine, and guanine.",
+    "questions": [
+      "What does DNA stand for?",
+      "What is the structure of DNA?",
+      "What are the components of a nucleotide?",
+      "Name one DNA base."
+    ],
+    "answers": [
+      "Deoxyribonucleic acid",
+      "Double helix",
+      "Sugar, phosphate group, and base",
+      "Adenine"
+    ]
+  },
+  {
+    "topic": "Geography - Nile River",
+    "context": "The Nile River is the longest river in Africa. It flows northward into the Mediterranean Sea. The river passes through countries including Egypt and Sudan. Its length is approximately 6650 kilometers. Ancient Egyptian civilization developed along its banks. The Nile has two main tributaries: the White Nile and the Blue Nile.",
+    "questions": [
+      "Where does the Nile River flow into?",
+      "Name one country the Nile passes through.",
+      "What is its approximate length?",
+      "Name one tributary of the Nile."
+    ],
+    "answers": [
+      "Mediterranean Sea",
+      "Egypt",
+      "6650 kilometers",
+      "White Nile"
+    ]
+  },
+  {
+    "topic": "Economics - GDP",
+    "context": "Gross Domestic Product (GDP) measures the total value of goods and services produced within a country. It is usually calculated annually or quarterly. GDP can be measured using production, income, or expenditure approaches. A rising GDP indicates economic growth. GDP does not account for income inequality. It is widely used by governments and economists.",
+    "questions": [
+      "What does GDP measure?",
+      "How often is GDP calculated?",
+      "Name one method to calculate GDP.",
+      "What does rising GDP indicate?"
+    ],
+    "answers": [
+      "Total value of goods and services",
+      "Annually or quarterly",
+      "Expenditure approach",
+      "Economic growth"
+    ]
+  },
+  {
+    "topic": "Computing - Internet",
+    "context": "The Internet is a global network of interconnected computers. It began as ARPANET in 1969. The World Wide Web was introduced in 1989 by Tim Berners-Lee. Data is transmitted using protocols like TCP/IP. The Internet supports services such as email and web browsing. It has billions of users worldwide.",
+    "questions": [
+      "What was the Internet originally called?",
+      "When did ARPANET begin?",
+      "Who introduced the World Wide Web?",
+      "What protocol is used for data transmission?"
+    ],
+    "answers": [
+      "ARPANET",
+      "1969",
+      "Tim Berners-Lee",
+      "TCP/IP"
+    ]
+  },
+  {
+    "topic": "Mathematics - Pythagorean Theorem",
+    "context": "The Pythagorean theorem applies to right-angled triangles. It states that the square of the hypotenuse equals the sum of squares of the other two sides. The formula is a² + b² = c². The hypotenuse is the longest side. This theorem is widely used in geometry. It is named after the Greek mathematician Pythagoras.",
+    "questions": [
+      "What type of triangle does the theorem apply to?",
+      "What is the formula?",
+      "Which side is the hypotenuse?",
+      "Who is it named after?"
+    ],
+    "answers": [
+      "Right-angled triangle",
+      "a² + b² = c²",
+      "Longest side",
+      "Pythagoras"
+    ]
+  },
+  {
+    "topic": "Medicine - Vaccination",
+    "context": "Vaccination is a method to prevent infectious diseases. It involves introducing a weakened or inactive pathogen. The immune system responds by producing antibodies. Edward Jenner developed the first vaccine in 1796. Vaccines help achieve herd immunity. They have reduced diseases like smallpox.",
+    "questions": [
+      "What does vaccination prevent?",
+      "What is introduced into the body?",
+      "Who developed the first vaccine?",
+      "In which year was the first vaccine developed?"
+    ],
+    "answers": [
+      "Infectious diseases",
+      "Weakened or inactive pathogen",
+      "Edward Jenner",
+      "1796"
+    ]
+  },
+  {
+    "topic": "Environmental Science - Climate Change",
+    "context": "Climate change refers to long-term shifts in temperatures and weather patterns. It is largely caused by greenhouse gas emissions. Carbon dioxide is a major greenhouse gas. The Industrial Revolution increased emissions significantly after 1750. Global temperatures have risen over the past century. Climate change affects ecosystems and sea levels.",
+    "questions": [
+      "What does climate change refer to?",
+      "What is a major greenhouse gas?",
+      "After which event did emissions increase significantly?",
+      "What has happened to global temperatures?"
+    ],
+    "answers": [
+      "Long-term shifts in temperatures and weather patterns",
+      "Carbon dioxide",
+      "Industrial Revolution",
+      "They have risen"
+    ]
+  },
+  {
+    "topic": "Political Science - United Nations",
+    "context": "The United Nations was established on October 24, 1945. It was formed after World War II. Its headquarters is in New York City. The organization aims to promote peace and cooperation. It has 193 member states. The UN Security Council is one of its main bodies.",
+    "questions": [
+      "When was the United Nations established?",
+      "Where is its headquarters located?",
+      "How many member states does it have?",
+      "Name one main body of the UN."
+    ],
+    "answers": [
+      "October 24, 1945",
+      "New York City",
+      "193",
+      "Security Council"
+    ]
+  },
+  {
+    "topic": "Engineering - Bridges",
+    "context": "Bridges are structures built to span physical obstacles. Common types include beam, arch, and suspension bridges. The Golden Gate Bridge is a famous suspension bridge completed in 1937. Bridges are made from materials like steel and concrete. They are used for transportation across rivers and valleys. Engineers design bridges to handle loads and stresses.",
+    "questions": [
+      "What are bridges used for?",
+      "Name one type of bridge.",
+      "When was the Golden Gate Bridge completed?",
+      "What material is commonly used in bridges?"
+    ],
+    "answers": [
+      "Transportation across obstacles",
+      "Suspension bridge",
+      "1937",
+      "Steel"
+    ]
+  },
+  {
+    "topic": "Space Exploration - Apollo 11",
+    "context": "Apollo 11 was the first mission to land humans on the Moon. It launched on July 16, 1969. The astronauts were Neil Armstrong, Buzz Aldrin, and Michael Collins. The Moon landing occurred on July 20, 1969. Armstrong was the first person to walk on the Moon. The mission returned safely to Earth on July 24, 1969.",
+    "questions": [
+      "When did Apollo 11 launch?",
+      "Who was the first person to walk on the Moon?",
+      "When did the Moon landing occur?",
+      "When did the mission return to Earth?"
+    ],
+    "answers": [
+      "July 16, 1969",
+      "Neil Armstrong",
+      "July 20, 1969",
+      "July 24, 1969"
+    ]
+  }
+]
