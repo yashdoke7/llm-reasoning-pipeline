@@ -62,27 +62,23 @@ class WikipediaRetriever:
             )
 
     def retrieve(self, query: str) -> list[RetrievedDoc]:
-        """
-        Retrieve Wikipedia passages relevant to the query.
-
-        Args:
-            query: Search query (should be a concise factual question or claim)
-
-        Returns:
-            List of RetrievedDoc sorted by relevance
-        """
         if not self._wrapper:
             return []
 
-        # Clean query — remove question words that confuse Wikipedia search
-        clean_query = re.sub(r"^(what is|who is|when did|where is|how does)\s+", "", query, flags=re.I).strip()
-        clean_query = clean_query.rstrip("?.,!")[:200]
+        # Strip hypothetical framing from causal/counterfactual questions
+        clean = re.sub(r"consider this hypothetical.*?[:\"]", "", query, flags=re.I | re.S)
+        clean = re.sub(r"^(what is|who is|when did|where is|how does)\s+", "", clean, flags=re.I)
+        clean = re.sub(r"[\"']", "", clean)  # remove quotes
+        clean = clean.rstrip("?.,!").strip()[:150]  # shorter = better Wikipedia hits
+
+        if not clean:
+            return []
 
         try:
-            raw = self._wrapper.run(clean_query)
+            raw = self._wrapper.run(clean)
             return self._parse_raw(raw)
         except Exception as e:
-            logger.warning(f"Wikipedia retrieval error for '{clean_query}': {e}")
+            logger.warning(f"Wikipedia retrieval error for '{clean[:60]}...': {e}")
             return []
 
     def retrieve_for_claims(self, suspicious_claims: list[str]) -> list[RetrievedDoc]:

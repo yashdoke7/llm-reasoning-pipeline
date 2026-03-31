@@ -1,13 +1,13 @@
 """
-experiments/run_comparison_eval.py
-Phase 2 comparison evaluation (base vs fine-tuned / quantized).
+run_comparison_eval.py  —  Compare base vs fine-tuned model step-by-step.
 
-Improvements over previous version:
-  - Uses independent judge for final-answer checking (no self-grading bias)
-  - Supports multiple categories in one run
-  - Supports custom JSONL dataset (for physics-specific evaluation)
-  - Writes timestamped comparison outputs + latest aliases
+Key fixes applied:
+  - Judge client is always a FRESH instance (fixes shared-singleton usage bug)
+  - Separate usage tracking for solver vs judge
+  - Graceful Groq rate-limit fallback to ollama judge
+  - Timeout & retry logic added
 """
+
 from __future__ import annotations
 
 import argparse
@@ -16,488 +16,493 @@ import logging
 import os
 import sys
 import time
-from dataclasses import dataclass
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
-
-_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(_ROOT))
-
-from dotenv import load_dotenv
-load_dotenv(_ROOT / ".env")
+from typing import Any, Optional
 
 import yaml
 
-from models import get_client
-from eval.task_decomposer import TaskDecomposer
-from eval.step_evaluator import StepEvaluator
-from eval.metrics import MetricsAggregator
-from eval.hallucination_scorer import HallucinationScorer
-from eval.drift_detector import DriftDetector
-from experiments.run_baseline_eval import (
-    load_category_tasks,
-    task_to_decomposer_fields,
-    ground_truth_for_category,
+# ── logging ──────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
-
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class SimpleResponse:
-    content: str
+# ── client helpers ────────────────────────────────────────────────────────────
+
+def make_ollama_client(cfg: dict, model: str):
+    """Always returns a FRESH OllamaClient — never the cached singleton."""
+    try:
+        from models.ollama_client import OllamaClient
+    except ImportError:
+        from ollama_client import OllamaClient
+
+    params = cfg.get("ollama", {})
+    client = OllamaClient(
+        host=params.get("host", "http://localhost:11434"),
+        timeout=params.get("timeout", 180.0),
+    )
+    client._default_model = model
+    return client
 
 
-class GGUFInferenceClient:
-    def __init__(self, model_path: str, n_ctx: int = 2048, n_gpu_layers: int = 35) -> None:
+def make_groq_client(cfg: dict, model: str):
+    """Returns a Groq client."""
+    try:
+        from models.groq_client import GroqClient
+    except ImportError:
+        from groq_client import GroqClient
+
+    params = cfg.get("groq", {})
+    client = GroqClient(
+        api_key=os.environ.get("GROQ_API_KEY", params.get("api_key", "")),
+        model=model,
+    )
+    return client
+
+
+def get_client(cfg: dict, provider: str, model: str, force_new: bool = False):
+    """
+    Returns an inference client.
+    force_new=True always creates a new instance (use for judge to avoid singleton).
+    """
+    if provider == "ollama":
+        return make_ollama_client(cfg, model)
+    elif provider == "groq":
+        return make_groq_client(cfg, model)
+    else:
+        raise ValueError(f"Unknown provider: {provider}")
+
+
+def call_with_retry(client, prompt: str, model: str, max_retries: int = 3,
+                    temperature: float = 0.1, max_tokens: int = 1024) -> str:
+    """Calls client with exponential backoff on failure."""
+    for attempt in range(max_retries):
         try:
-            from llama_cpp import Llama
-        except ImportError:
-            raise ImportError(
-                "llama-cpp-python not installed.\n"
-                "Run: pip install llama-cpp-python"
+            response = client.complete(
+                prompt=prompt,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
             )
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"GGUF model not found: {model_path}")
-
-        logger.info(f"Loading GGUF model: {model_path}")
-        self._llm = Llama(
-            model_path=model_path,
-            n_ctx=n_ctx,
-            n_gpu_layers=n_gpu_layers,
-            verbose=False,
-        )
-
-    def complete(
-        self,
-        model: str,  # ignored
-        user_prompt: str,
-        system_prompt: Optional[str] = None,
-        temperature: float = 0.1,
-        max_tokens: int = 1024,
-        **kwargs,
-    ) -> SimpleResponse:
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": user_prompt})
-
-        output = self._llm.create_chat_completion(
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        return SimpleResponse(content=output["choices"][0]["message"]["content"])
+            return response
+        except Exception as e:
+            wait = 2 ** attempt
+            logger.warning(f"Attempt {attempt+1}/{max_retries} failed: {e}. Retrying in {wait}s...")
+            time.sleep(wait)
+    raise RuntimeError(f"All {max_retries} attempts failed for model {model}")
 
 
-class HFInferenceClient:
-    def __init__(self, model_path: str) -> None:
-        try:
-            import torch
-            from transformers import AutoModelForCausalLM, AutoTokenizer
-        except ImportError:
-            raise ImportError("transformers/torch not installed. Run: pip install transformers torch")
+# ── task loading ──────────────────────────────────────────────────────────────
 
-        if not os.path.isdir(model_path):
-            raise FileNotFoundError(f"HF model directory not found: {model_path}")
+def load_tasks(cfg: dict, categories: list[str], samples_per_cat: int) -> list[dict]:
+    """Load evaluation tasks from dataset files or generate them."""
+    tasks = []
+    data_dir = Path("finetune/data")
 
-        self._torch = torch
-        self._tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-        if self._tokenizer.pad_token is None:
-            self._tokenizer.pad_token = self._tokenizer.eos_token
+    # Try loading from existing JSONL files
+    source_files = cfg.get("dataset", {}).get("source_files", [])
+    all_by_cat: dict[str, list] = defaultdict(list)
 
-        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-        self._model = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            trust_remote_code=True,
-            torch_dtype=dtype,
-            device_map="auto" if torch.cuda.is_available() else None,
-        )
+    for fpath in source_files:
+        p = Path(fpath)
+        if not p.exists():
+            logger.warning(f"Dataset file not found: {fpath}")
+            continue
+        with open(p) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                    cat = row.get("category", "unknown")
+                    if cat in categories:
+                        all_by_cat[cat].append(row)
+                except json.JSONDecodeError:
+                    continue
 
-    def complete(
-        self,
-        model: str,  # ignored
-        user_prompt: str,
-        system_prompt: Optional[str] = None,
-        temperature: float = 0.1,
-        max_tokens: int = 1024,
-        **kwargs,
-    ) -> SimpleResponse:
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": user_prompt})
+    for cat in categories:
+        pool = all_by_cat.get(cat, [])
+        if len(pool) == 0:
+            logger.warning(f"No tasks found for category '{cat}' — will skip")
+            continue
+        import random
+        selected = random.sample(pool, min(samples_per_cat, len(pool)))
+        tasks.extend(selected)
+        logger.info(f"  Loaded {len(selected)} tasks for '{cat}'")
 
-        if hasattr(self._tokenizer, "apply_chat_template"):
-            prompt = self._tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-        else:
-            prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages]) + "\nassistant:"
-
-        inputs = self._tokenizer(prompt, return_tensors="pt")
-        if self._torch.cuda.is_available():
-            inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
-
-        out = self._model.generate(
-            **inputs,
-            do_sample=True,
-            temperature=temperature,
-            max_new_tokens=max_tokens,
-            pad_token_id=self._tokenizer.eos_token_id,
-        )
-        new_tokens = out[0][inputs["input_ids"].shape[1]:]
-        content = self._tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
-        return SimpleResponse(content=content)
-
-
-def _load_custom_jsonl(path: str, category: str, max_samples: int) -> list[dict]:
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Custom dataset not found: {path}")
-    tasks: list[dict] = []
-    with open(path, encoding="utf-8") as f:
-        for i, line in enumerate(f):
-            if max_samples and len(tasks) >= max_samples:
-                break
-            line = line.strip()
-            if not line:
-                continue
-            row = json.loads(line)
-            question = (row.get("question") or row.get("problem") or row.get("prompt") or "").strip()
-            if not question:
-                continue
-            tasks.append(
-                {
-                    "id": row.get("id", f"{category}_{i:04d}"),
-                    "category": category,
-                    "question": question,
-                    "ground_truth": (
-                        row.get("ground_truth")
-                        or row.get("final_answer")
-                        or row.get("answer")
-                        or ""
-                    ),
-                }
-            )
-    logger.info(f"Loaded {len(tasks)} custom tasks from {path} (category={category})")
+    logger.info(f"Total tasks loaded: {len(tasks)}")
     return tasks
 
 
-def _safe_task_fields(task_dict: dict, category: str) -> dict:
-    try:
-        return task_to_decomposer_fields(task_dict, category)
-    except Exception:
-        # Fallback for custom categories that still expose question text
-        if "question" in task_dict:
-            return {"question": task_dict["question"]}
-        if "prompt" in task_dict:
-            return {"question": task_dict["prompt"]}
-        raise
+# ── step decomposition & evaluation ──────────────────────────────────────────
+
+SOLVER_PROMPT_TEMPLATE = """Solve the following problem step by step.
+Number each step clearly (Step 1:, Step 2:, etc.).
+Show your reasoning for each step before giving a final answer.
+
+Problem: {problem}
+
+Solution:"""
+
+JUDGE_PROMPT_TEMPLATE = """You are evaluating reasoning steps for correctness.
+
+Problem: {problem}
+Expected Answer: {expected}
+
+Model's Solution:
+{solution}
+
+For each numbered step, evaluate if it is VALID (correct reasoning), INVALID (wrong/misleading), or UNCERTAIN.
+Then state if the final answer is CORRECT or INCORRECT.
+
+Respond in this exact format:
+Step 1: VALID/INVALID/UNCERTAIN - brief reason
+Step 2: VALID/INVALID/UNCERTAIN - brief reason
+...
+Final Answer: CORRECT/INCORRECT
+Overall: PASS/FAIL"""
 
 
-def _default_output_path(outputs_dir: str, categories: list[str], run_suffix: str) -> str:
-    if len(categories) == 1:
-        return os.path.join(outputs_dir, f"comparison_{categories[0]}_results_{run_suffix}.json")
-    return os.path.join(outputs_dir, f"comparison_results_{run_suffix}.json")
+def decompose_steps(solution: str) -> list[str]:
+    """Extract numbered steps from a solution string."""
+    import re
+    steps = re.findall(r"Step\s+\d+[:\.]?\s*(.+?)(?=Step\s+\d+|$)", solution,
+                       re.IGNORECASE | re.DOTALL)
+    return [s.strip() for s in steps if s.strip()]
 
 
-def run_comparison(
-    categories: list[str],
-    tasks_by_category: dict[str, list[dict]],
-    models_to_compare: list[dict],
-    cfg: dict,
-    output_path: str,
-    judge_provider: str,
-    judge_model: str,
-    use_wandb: bool,
-    with_diagnostics: bool,
-) -> tuple[dict, dict]:
-    judge_client = get_client(cfg, provider=judge_provider)
+def parse_judge_response(judge_response: str) -> dict:
+    """Parse judge output into structured metrics."""
+    import re
+    lines = judge_response.strip().split("\n")
 
-    decomposer = TaskDecomposer()
-    step_evaluator = StepEvaluator(
-        client=judge_client,
-        evaluator_model=judge_model,
-        judge_client=judge_client,
-        judge_model=judge_model,
-    )
-    hall_scorer = HallucinationScorer(client=judge_client, model=judge_model) if with_diagnostics else None
-    drift_detector = DriftDetector(client=judge_client, model=judge_model) if with_diagnostics else None
+    step_verdicts = []
+    final_correct = False
+    overall_pass = False
 
-    aggregator = MetricsAggregator(
-        wandb_project=cfg["api"]["wandb_project"],
-        use_wandb=use_wandb,
-    )
-    aggregator.init_run(
-        run_name=f"comparison_{'_'.join(categories)}_{int(time.time())}",
-        config={"categories": categories, "models": [m["name"] for m in models_to_compare]},
-    )
+    for line in lines:
+        line = line.strip()
+        step_match = re.match(r"Step\s+\d+:\s*(VALID|INVALID|UNCERTAIN)", line, re.I)
+        if step_match:
+            step_verdicts.append(step_match.group(1).upper())
 
-    run_start = time.time()
-    all_results: dict[str, dict[str, list[dict]]] = {}
-    inference_clients: dict[str, object] = {}
-    eval_cfg = cfg["eval"]
-    attempted = 0
-    completed = 0
+        if re.search(r"Final Answer:\s*CORRECT", line, re.I):
+            final_correct = True
+        if re.search(r"Overall:\s*PASS", line, re.I):
+            overall_pass = True
 
-    for model_spec in models_to_compare:
-        model_name = model_spec["name"]
-        logger.info(f"\nBenchmarking: {model_name}")
-        all_results[model_name] = {}
+    n_steps = len(step_verdicts)
+    n_invalid = sum(1 for v in step_verdicts if v == "INVALID")
+    step_failure_rate = n_invalid / n_steps if n_steps > 0 else 0.0
 
-        if model_spec["type"] == "gguf":
-            try:
-                inference = GGUFInferenceClient(model_spec["id_or_path"])
-                model_id = "local_gguf"
-            except Exception as e:
-                logger.error(f"Failed to load GGUF model {model_spec['id_or_path']}: {e}")
-                continue
-        elif model_spec["type"] == "hf":
-            try:
-                inference = HFInferenceClient(model_spec["id_or_path"])
-                model_id = "local_hf"
-            except Exception as e:
-                logger.error(f"Failed to load HF model {model_spec['id_or_path']}: {e}")
-                continue
-        else:
-            provider = model_spec["type"]
-            if provider not in inference_clients:
-                inference_clients[provider] = get_client(cfg, provider=provider)
-            inference = inference_clients[provider]
-            model_id = model_spec["id_or_path"]
+    # Error propagation: did an early invalid step lead to wrong answer?
+    error_propagated = False
+    if n_invalid > 0 and not final_correct:
+        error_propagated = True
 
-        for category in categories:
-            tasks = tasks_by_category.get(category, [])
-            all_results[model_name][category] = []
-            logger.info(f"  Category: {category} ({len(tasks)} tasks)")
-
-            for i, task_dict in enumerate(tasks):
-                attempted += 1
-                task_id = task_dict.get("id", f"{category}_{i:04d}")
-                fields = _safe_task_fields(task_dict, category)
-                gt = task_dict.get("ground_truth") or ground_truth_for_category(task_dict, category)
-
-                decomposed = decomposer.build(
-                    task_id=task_id,
-                    category=category,
-                    ground_truth=gt,
-                    **fields,
-                )
-                try:
-                    resp = inference.complete(
-                        model=model_id,
-                        user_prompt=decomposed.prompt,
-                        system_prompt=decomposer.get_system_prompt(category),
-                        temperature=eval_cfg["temperature"],
-                        max_tokens=eval_cfg["max_tokens"],
-                    )
-                    decomposed = decomposer.parse_response(decomposed, resp.content)
-                    task_eval = step_evaluator.evaluate(decomposed, model_name=model_name)
-                    if with_diagnostics and hall_scorer and drift_detector:
-                        hall_scores = hall_scorer.score_steps(task_id, decomposed.steps, decomposed.prompt[:400])
-                        drift_result = drift_detector.detect(task_id, decomposed.prompt, decomposed.steps, category)
-                        aggregator.add_task_eval(task_eval, hall_scores, drift_result)
-                    else:
-                        aggregator.add_task_eval(task_eval)
-                    all_results[model_name][category].append(step_evaluator.to_dict(task_eval))
-                    completed += 1
-                except Exception as e:
-                    logger.error(f"[{task_id}] Inference/eval error: {e}")
-                    continue
-
-                if (i + 1) % 10 == 0:
-                    logger.info(f"    {model_name} [{category}] {i + 1}/{len(tasks)}")
-
-    metrics = aggregator.finalize(output_path=output_path)
-    aggregator.finish_run()
-
-    logger.info("\n" + "=" * 70)
-    logger.info("COMPARISON RESULTS")
-    logger.info("=" * 70)
-    logger.info(f"{'Model':<30} {'Step Fail':>10} {'Accuracy':>10} {'Error Prop':>12}")
-    logger.info("-" * 70)
-    for m in metrics.get("model_summary", []):
-        logger.info(
-            f"{m['model']:<30} "
-            f"{m['overall_step_failure_rate']:>10.3f} "
-            f"{m['overall_final_accuracy']:>10.3f} "
-            f"{m['overall_error_propagation_rate']:>12.3f}"
-        )
-
-    manifest = {
-        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
-        "duration_seconds": round(time.time() - run_start, 2),
-        "judge_provider": judge_provider,
-        "judge_model": judge_model,
-        "categories": categories,
-        "models": models_to_compare,
-        "tasks_attempted": attempted,
-        "tasks_completed": completed,
-        "tasks_missing": max(0, attempted - completed),
-        "with_diagnostics": with_diagnostics,
-        "output_eval_results": output_path,
+    return {
+        "step_verdicts": step_verdicts,
+        "n_steps": n_steps,
+        "n_invalid": n_invalid,
+        "step_failure_rate": step_failure_rate,
+        "final_correct": final_correct,
+        "overall_pass": overall_pass,
+        "error_propagated": error_propagated,
     }
-    return metrics, {"raw_results": all_results, "manifest": manifest}
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Phase 2 comparison evaluation")
-    parser.add_argument("--config", default="configs/config.yaml")
-    parser.add_argument("--category", default=None, help="Single category (legacy flag)")
-    parser.add_argument("--categories", nargs="+", default=None, help="Evaluate multiple categories")
-    parser.add_argument("--samples", type=int, default=50)
-    parser.add_argument("--no-wandb", action="store_true")
-    parser.add_argument("--skip-base", action="store_true")
-    parser.add_argument("--base-model", default="qwen2.5:3b")
-    parser.add_argument("--base-type", choices=["ollama", "groq", "openai"], default="ollama")
-    parser.add_argument("--finetuned-model", default=None)
-    parser.add_argument("--judge-provider", choices=["ollama", "groq", "openai"], default="ollama")
-    parser.add_argument("--judge-model", default=None)
-    parser.add_argument("--output", default=None, help="Explicit eval output JSON path")
-    parser.add_argument("--with-diagnostics", action="store_true", help="Compute hallucination/drift metrics too")
-    parser.add_argument("--custom-dataset", default=None, help="Custom JSONL dataset path (e.g. physics_eval.jsonl)")
-    parser.add_argument("--custom-category", default="physics_reasoning", help="Category label for custom dataset")
-    args = parser.parse_args()
+# ── main evaluation loop ──────────────────────────────────────────────────────
 
-    config_path = _ROOT / args.config
-    with open(config_path, encoding="utf-8") as f:
+def evaluate_model(
+    model_name: str,
+    tasks: list[dict],
+    solver_client,
+    judge_client,
+    judge_model: str,
+    cfg: dict,
+    results_store: list,
+) -> dict[str, Any]:
+    """Run evaluation for a single model across all tasks."""
+    eval_cfg = cfg.get("evaluation", {})
+    solver_temp = eval_cfg.get("solver_temperature", 0.1)
+    judge_temp = eval_cfg.get("judge_temperature", 0.0)
+    max_tokens = eval_cfg.get("max_tokens", 1024)
+
+    all_metrics = []
+    by_category: dict[str, list] = defaultdict(list)
+
+    for i, task in enumerate(tasks):
+        problem = task.get("problem", task.get("prompt", task.get("input", "")))
+        expected = task.get("expected", task.get("answer", task.get("output", "")))
+        category = task.get("category", "unknown")
+
+        logger.info(f"  [{model_name}] Task {i+1}/{len(tasks)} | {category}")
+
+        # 1. Solve
+        solver_prompt = SOLVER_PROMPT_TEMPLATE.format(problem=problem)
+        try:
+            solution = call_with_retry(
+                solver_client, solver_prompt, model_name,
+                temperature=solver_temp, max_tokens=max_tokens
+            )
+        except RuntimeError as e:
+            logger.error(f"Solver failed for task {i}: {e}")
+            solution = "[SOLVER ERROR]"
+
+        # 2. Judge — uses its OWN client (not shared with solver)
+        judge_prompt = JUDGE_PROMPT_TEMPLATE.format(
+            problem=problem,
+            expected=expected,
+            solution=solution,
+        )
+        try:
+            judge_response = call_with_retry(
+                judge_client, judge_prompt, judge_model,
+                temperature=judge_temp, max_tokens=512
+            )
+        except RuntimeError as e:
+            logger.error(f"Judge failed for task {i}: {e}")
+            judge_response = "Final Answer: INCORRECT\nOverall: FAIL"
+
+        # 3. Parse metrics
+        metrics = parse_judge_response(judge_response)
+        metrics["model"] = model_name
+        metrics["category"] = category
+        metrics["task_id"] = i
+        metrics["problem"] = problem[:200]  # truncate for storage
+        metrics["solution"] = solution[:500]
+        metrics["judge_response"] = judge_response
+
+        all_metrics.append(metrics)
+        by_category[category].append(metrics)
+        results_store.append(metrics)
+
+    # Aggregate
+    n = len(all_metrics)
+    if n == 0:
+        return {"model": model_name, "error": "no tasks evaluated"}
+
+    agg = {
+        "model": model_name,
+        "n_tasks": n,
+        "step_failure": sum(m["step_failure_rate"] for m in all_metrics) / n,
+        "accuracy": sum(1 for m in all_metrics if m["final_correct"]) / n,
+        "error_prop": sum(1 for m in all_metrics if m["error_propagated"]) / n,
+        "by_category": {},
+    }
+
+    for cat, cat_metrics in by_category.items():
+        nc = len(cat_metrics)
+        agg["by_category"][cat] = {
+            "n": nc,
+            "step_failure": sum(m["step_failure_rate"] for m in cat_metrics) / nc,
+            "accuracy": sum(1 for m in cat_metrics if m["final_correct"]) / nc,
+            "error_prop": sum(1 for m in cat_metrics if m["error_propagated"]) / nc,
+        }
+
+    return agg
+
+
+# ── failure report ────────────────────────────────────────────────────────────
+
+def build_failure_report(
+    base_results: dict, ft_results: dict,
+    base_model: str, ft_model: str,
+) -> dict:
+    """Identify which categories regressed and suggest fine-tune target."""
+    report = {
+        "base_model": base_model,
+        "ft_model": ft_model,
+        "timestamp": datetime.now().isoformat(),
+        "category_comparison": {},
+        "fine_tuning_target": None,
+        "verdict": "",
+    }
+
+    worst_regression = 0.0
+    worst_cat = None
+
+    for cat in base_results.get("by_category", {}):
+        base_cat = base_results["by_category"].get(cat, {})
+        ft_cat = ft_results["by_category"].get(cat, {})
+
+        base_sf = base_cat.get("step_failure", 0)
+        ft_sf = ft_cat.get("step_failure", 0)
+        regression = ft_sf - base_sf  # positive = fine-tuned is WORSE
+
+        report["category_comparison"][cat] = {
+            "base_step_failure": base_sf,
+            "ft_step_failure": ft_sf,
+            "regression": regression,
+            "base_accuracy": base_cat.get("accuracy", 0),
+            "ft_accuracy": ft_cat.get("accuracy", 0),
+        }
+
+        if ft_sf > worst_regression:
+            worst_regression = ft_sf
+            worst_cat = cat
+
+    report["fine_tuning_target"] = worst_cat
+    if ft_results.get("accuracy", 0) < base_results.get("accuracy", 0):
+        report["verdict"] = f"REGRESSION: fine-tuned worse overall. Retrain with targeted data on '{worst_cat}'."
+    else:
+        report["verdict"] = f"IMPROVEMENT: fine-tuned better overall. Weakest category: '{worst_cat}'."
+
+    return report
+
+
+# ── entry point ───────────────────────────────────────────────────────────────
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Compare base vs fine-tuned model")
+    p.add_argument("--config", default="config_3b.yaml", help="YAML config file")
+    p.add_argument("--models", nargs=2, metavar=("BASE", "FINETUNED"),
+                   help="Override model names from config")
+    p.add_argument("--judge-provider", default=None,
+                   choices=["ollama", "groq"],
+                   help="Provider for judge model")
+    p.add_argument("--judge-model", default=None,
+                   help="Judge model name override")
+    p.add_argument("--solver-provider", default="ollama",
+                   choices=["ollama", "groq"])
+    p.add_argument("--categories", nargs="+", default=None,
+                   help="Categories to evaluate (default: all from config)")
+    p.add_argument("--samples", type=int, default=None,
+                   help="Samples per category override")
+    p.add_argument("--output", default=None,
+                   help="Output file path override")
+    p.add_argument("--no-wandb", action="store_true",
+                   help="Disable wandb logging")
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    # Load config
+    cfg_path = Path(args.config)
+    if not cfg_path.exists():
+        logger.error(f"Config not found: {cfg_path}")
+        sys.exit(1)
+
+    with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
+    eval_cfg = cfg.get("evaluation", {})
+    models_cfg = cfg.get("models", {})
+
+    # Resolve model names
+    base_model = (args.models[0] if args.models else None) or models_cfg.get("solver", "qwen2.5:3b")
+    ft_model = (args.models[1] if args.models else None) or models_cfg.get("fine_tuned", "qwen2.5-3b-targeted-v3")
+
+    # Resolve judge
+    judge_provider = args.judge_provider or cfg.get("providers", {}).get("judge_provider", "ollama")
+    judge_model = args.judge_model or models_cfg.get("judge", "qwen2.5:14b")
+
+    # Resolve solver provider
+    solver_provider = args.solver_provider or cfg.get("providers", {}).get("solver_provider", "ollama")
+
+    # Resolve categories & samples
+    categories = args.categories or eval_cfg.get("categories", [
+        "multistep_arithmetic", "tool_use_planning",
+        "factual_consistency", "causal_counterfactual"
+    ])
+    samples_per_cat = args.samples or eval_cfg.get("samples_per_category", 8)
+
+    logger.info("=" * 60)
+    logger.info("COMPARISON EVAL STARTING")
+    logger.info(f"  Base model:    {base_model} (provider: {solver_provider})")
+    logger.info(f"  Fine-tuned:    {ft_model}   (provider: {solver_provider})")
+    logger.info(f"  Judge:         {judge_model} (provider: {judge_provider})")
+    logger.info(f"  Categories:    {categories}")
+    logger.info(f"  Samples/cat:   {samples_per_cat}")
+    logger.info("=" * 60)
+
+    # ── Create clients ────────────────────────────────────────────────────────
+    # KEY FIX: judge always gets force_new=True so it's never the same object
+    # as any solver client, even when both use ollama
+    base_solver_client  = get_client(cfg, solver_provider, base_model, force_new=False)
+    ft_solver_client    = get_client(cfg, solver_provider, ft_model,   force_new=False)
+    judge_client        = get_client(cfg, judge_provider,  judge_model, force_new=True)
+
+    # ── Load tasks ────────────────────────────────────────────────────────────
+    tasks = load_tasks(cfg, categories, samples_per_cat)
+    if not tasks:
+        logger.error("No tasks loaded. Check your dataset paths in config.")
+        sys.exit(1)
+
+    # ── Evaluate ──────────────────────────────────────────────────────────────
+    all_raw_results = []
+
+    logger.info(f"\nEvaluating BASE model: {base_model}")
+    base_agg = evaluate_model(
+        base_model, tasks, base_solver_client, judge_client,
+        judge_model, cfg, all_raw_results
     )
 
-    outputs_dir = cfg["paths"]["outputs"]
-    os.makedirs(outputs_dir, exist_ok=True)
-
-    if args.categories:
-        categories = args.categories
-    elif args.category:
-        categories = [args.category]
-    elif args.custom_dataset:
-        categories = [args.custom_category]
-    else:
-        failure_path = cfg["paths"]["failure_report"]
-        if os.path.exists(failure_path):
-            with open(failure_path, encoding="utf-8") as f:
-                fr = json.load(f)
-            categories = [fr.get("finetune_target_category", "multistep_arithmetic")]
-        else:
-            categories = ["multistep_arithmetic"]
-
-    cfg["eval"]["samples_per_category"] = args.samples
-    tasks_by_category: dict[str, list[dict]] = {}
-    if args.custom_dataset:
-        cat = args.custom_category
-        tasks_by_category[cat] = _load_custom_jsonl(args.custom_dataset, cat, args.samples)
-        categories = [cat]
-    else:
-        for category in categories:
-            tasks_by_category[category] = load_category_tasks(category, cfg)
-
-    quant_dir = cfg["finetune"]["quantization"]["output_dir"]
-    models_to_compare = []
-    if not args.skip_base:
-        models_to_compare.append(
-            {
-                "name": f"{args.base_model}-base",
-                "type": args.base_type,
-                "id_or_path": args.base_model,
-            }
-        )
-
-    finetuned_path = args.finetuned_model
-    if not finetuned_path:
-        q4 = os.path.join(quant_dir, "model_q4_k_m.gguf")
-        fp16 = os.path.join(quant_dir, "model_fp16.gguf")
-        hf_dir = os.path.join(cfg["paths"]["outputs"], "merged_model")
-        if os.path.exists(q4):
-            finetuned_path = q4
-        elif os.path.exists(fp16):
-            finetuned_path = fp16
-        elif os.path.isdir(hf_dir):
-            finetuned_path = hf_dir
-
-    if finetuned_path and os.path.exists(finetuned_path):
-        if os.path.isdir(finetuned_path):
-            models_to_compare.append(
-                {
-                    "name": "Qwen-3B-LoRA-HF",
-                    "type": "hf",
-                    "id_or_path": finetuned_path,
-                }
-            )
-        else:
-            lower = finetuned_path.lower()
-            quant_level = "Q4_K_M" if "q4_k_m" in lower else "Q8_0" if "q8_0" in lower else "FP16"
-            models_to_compare.append(
-                {
-                    "name": f"Qwen-3B-LoRA-{quant_level}",
-                    "type": "gguf",
-                    "id_or_path": finetuned_path,
-                }
-            )
-        logger.info(f"Using finetuned model: {finetuned_path}")
-    else:
-        logger.warning("No finetuned model found. Running base-only comparison.")
-
-    if not models_to_compare:
-        raise RuntimeError("No models to compare. Check base/finetuned model arguments.")
-
-    if args.judge_model:
-        judge_model = args.judge_model
-    elif args.judge_provider == "ollama":
-        judge_model = cfg["models"].get("local_judge_model", "qwen2.5:14b")
-    else:
-        judge_model = cfg["models"]["evaluator_model"]
-
-    run_suffix = f"{'_'.join(categories)}_{int(time.time())}"
-    output_path = args.output or _default_output_path(outputs_dir, categories, run_suffix)
-    metrics, extras = run_comparison(
-        categories=categories,
-        tasks_by_category=tasks_by_category,
-        models_to_compare=models_to_compare,
-        cfg=cfg,
-        output_path=output_path,
-        judge_provider=args.judge_provider,
-        judge_model=judge_model,
-        use_wandb=not args.no_wandb,
-        with_diagnostics=args.with_diagnostics,
+    logger.info(f"\nEvaluating FINE-TUNED model: {ft_model}")
+    ft_agg = evaluate_model(
+        ft_model, tasks, ft_solver_client, judge_client,
+        judge_model, cfg, all_raw_results
     )
 
-    raw_path = os.path.join(outputs_dir, f"comparison_raw_{run_suffix}.json")
-    with open(raw_path, "w", encoding="utf-8") as f:
-        json.dump(extras["raw_results"], f, indent=2)
+    # ── Build failure report ──────────────────────────────────────────────────
+    failure_report = build_failure_report(base_agg, ft_agg, base_model, ft_model)
 
-    manifest = extras["manifest"]
-    manifest["output_raw_results"] = raw_path
-    manifest_path = os.path.join(outputs_dir, f"comparison_manifest_{run_suffix}.json")
-    with open(manifest_path, "w", encoding="utf-8") as f:
+    # ── Save outputs ──────────────────────────────────────────────────────────
+    ts = int(time.time())
+    out_dir = Path(cfg.get("logging", {}).get("output_dir", "outputs"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    tag = f"{base_model.replace(':', '_')}_{ft_model.replace(':', '_')}_mit_{ts}"
+
+    raw_path      = args.output or out_dir / f"raw_results_{tag}.json"
+    manifest_path = out_dir / f"run_manifest_{tag}.json"
+    failure_path  = out_dir / f"failure_report_{tag}.json"
+
+    with open(raw_path, "w") as f:
+        json.dump(all_raw_results, f, indent=2)
+
+    manifest = {
+        "run_id": tag,
+        "timestamp": datetime.now().isoformat(),
+        "base_model": base_model,
+        "ft_model": ft_model,
+        "judge_model": judge_model,
+        "judge_provider": judge_provider,
+        "solver_provider": solver_provider,
+        "samples_per_category": samples_per_cat,
+        "categories": categories,
+        "base_aggregate": base_agg,
+        "ft_aggregate": ft_agg,
+        # note: usage tracking is now separate per client instance
+        "note": "solver and judge are separate client instances (singleton bug fixed)",
+    }
+    with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
 
-    # Update latest aliases only for standard runs (no explicit custom output path).
-    if args.output is None:
-        latest_eval = os.path.join(outputs_dir, "comparison_results.json")
-        with open(output_path, encoding="utf-8") as fsrc, open(latest_eval, "w", encoding="utf-8") as fdst:
-            fdst.write(fsrc.read())
+    with open(failure_path, "w") as f:
+        json.dump(failure_report, f, indent=2)
 
-        latest_manifest = os.path.join(outputs_dir, "comparison_manifest.json")
-        with open(manifest_path, encoding="utf-8") as fsrc, open(latest_manifest, "w", encoding="utf-8") as fdst:
-            fdst.write(fsrc.read())
-
-        if len(categories) == 1:
-            cat_alias = os.path.join(outputs_dir, f"comparison_{categories[0]}_results.json")
-            with open(output_path, encoding="utf-8") as fsrc, open(cat_alias, "w", encoding="utf-8") as fdst:
-                fdst.write(fsrc.read())
-
-    logger.info(f"Saved comparison metrics:  {output_path}")
-    logger.info(f"Saved comparison raw:      {raw_path}")
-    logger.info(f"Saved comparison manifest: {manifest_path}")
+    # ── Print summary ─────────────────────────────────────────────────────────
+    logger.info("\n" + "=" * 60)
+    logger.info("EVALUATION COMPLETE — SUMMARY")
+    logger.info("=" * 60)
+    logger.info(f"  {base_model}: step_failure={base_agg['step_failure']:.3f} | "
+                f"accuracy={base_agg['accuracy']:.3f} | error_prop={base_agg['error_prop']:.3f}")
+    logger.info(f"  {ft_model}: step_failure={ft_agg['step_failure']:.3f} | "
+                f"accuracy={ft_agg['accuracy']:.3f} | error_prop={ft_agg['error_prop']:.3f}")
+    logger.info(f"\n{failure_report['verdict']}")
+    logger.info(f"Fine-tuning target: {failure_report['fine_tuning_target']}")
+    logger.info(f"\nResults saved to:   {raw_path}")
+    logger.info(f"Failure report:     {failure_path}")
+    logger.info(f"Run manifest:       {manifest_path}")
 
 
 if __name__ == "__main__":

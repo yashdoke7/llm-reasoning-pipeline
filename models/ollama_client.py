@@ -153,14 +153,16 @@ class OllamaClient:
 
 _ollama_instance: Optional[OllamaClient] = None
 
-
-def get_ollama_client(cfg: Optional[dict] = None) -> OllamaClient:
-    """Return a cached OllamaClient instance."""
+def get_ollama_client(cfg: Optional[dict] = None, force_new: bool = True) -> OllamaClient:
+    """Return a cached OllamaClient. Pass force_new=True to get a fresh tracking instance."""
     global _ollama_instance
-    if _ollama_instance is None:
+    if _ollama_instance is None or force_new:
         params = cfg.get("ollama", {}) if cfg else {}
-        _ollama_instance = OllamaClient(
+        inst = OllamaClient(
             host=params.get("host", "http://localhost:11434"),
             timeout=params.get("timeout", 120.0),
         )
+        if not force_new:
+            _ollama_instance = inst
+        return inst
     return _ollama_instance
