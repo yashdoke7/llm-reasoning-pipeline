@@ -11,25 +11,25 @@ project:
 api:
   groq_api_key_env: GROQ_API_KEY
   groq_api_key_envs:
-  - GROQ_API_KEY
-  - GROQ_API_KEY_2
-  - GROQ_API_KEY_3
-  - GROQ_API_KEY_4
+    - GROQ_API_KEY
+    - GROQ_API_KEY_2
+    - GROQ_API_KEY_3
+    - GROQ_API_KEY_4
   openai_api_key_env: OPENAI_API_KEY
   wandb_api_key_env: WANDB_API_KEY
   wandb_project: llm-reasoning-eval
   wandb_entity: null
 models:
   eval_models:
-  - id: llama-3.1-8b-instant
-    display_name: Llama-3.1-8B
-    provider: groq
-  - id: llama-3.3-70b-versatile
-    display_name: Llama-3.3-70B
-    provider: groq
-  - id: meta-llama/llama-4-scout-17b-16e-instruct
-    display_name: Llama-4-Scout
-    provider: groq
+    - id: llama-3.1-8b-instant
+      display_name: Llama-3.1-8B
+      provider: groq
+    - id: llama-3.3-70b-versatile
+      display_name: Llama-3.3-70B
+      provider: groq
+    - id: meta-llama/llama-4-scout-17b-16e-instruct
+      display_name: Llama-4-Scout
+      provider: groq
   evaluator_model: llama-3.3-70b-versatile
   trace_gen_model: llama-3.3-70b-versatile
   local_judge_model: qwen2.5:14b
@@ -49,10 +49,10 @@ eval:
   uncertainty_threshold: 0.4
   hallucination_threshold: 0.6
   categories:
-  - multistep_arithmetic
-  - factual_consistency
-  - tool_use_planning
-  - causal_counterfactual
+    - multistep_arithmetic
+    - factual_consistency
+    - tool_use_planning
+    - causal_counterfactual
 datasets:
   gsm8k:
     split: test
@@ -68,11 +68,11 @@ datasets:
     path: data_loaders/data/generated_factual.jsonl
     max_samples: 60
     topics:
-    - climate_change
-    - machine_learning
-    - world_war_ii
-    - quantum_computing
-    - space_exploration
+      - climate_change
+      - machine_learning
+      - world_war_ii
+      - quantum_computing
+      - space_exploration
   physics:
     path: data_loaders/data/physics_eval.jsonl
     max_samples: 60
@@ -92,14 +92,21 @@ finetune:
   base_model: Qwen/Qwen2.5-3B-Instruct
   output_dir: outputs/finetuned_3b_targeted_v3
   dataset_path: finetune/data/targeted_arithmetic_v3.jsonl
+  target_category: multistep_arithmetic
+  target_ratio: 0.55
+  total_samples: 600
+  output_model: qwen2.5-3b-targeted-v4
+  epochs: 1
+  batch_size: 1
+  learning_rate: 7.0e-05
   lora:
     r: 16
     lora_alpha: 32
     target_modules:
-    - q_proj
-    - v_proj
-    - k_proj
-    - o_proj
+      - q_proj
+      - v_proj
+      - k_proj
+      - o_proj
     lora_dropout: 0.05
     bias: none
   training:
@@ -119,19 +126,10 @@ finetune:
   quantization:
     output_dir: outputs/quantized
     formats:
-    - name: Q4_K_M
-      description: 4-bit, best quality/size tradeoff
-    - name: Q8_0
-      description: 8-bit, near full quality
-  target_category: multistep_arithmetic
-  target_ratio: 0.55
-  total_samples: 600
-  output_model: qwen2.5-3b-targeted-v4
-  epochs: 1
-  batch_size: 1
-  learning_rate: 7.0e-05
-  lora_rank: 16
-  lora_alpha: 32
+      - name: Q4_K_M
+        description: 4-bit, best quality/size tradeoff
+      - name: Q8_0
+        description: 8-bit, near full quality
 paths:
   logs: logs
   outputs: outputs
@@ -145,10 +143,9 @@ logging:
   file: logs/pipeline.log
 dataset:
   source_files:
-  - finetune/data/generated_from_failures_fixed.jsonl
-  - data_loaders/data/ft_math_300.jsonl
-  - data_loaders/data/ft_factual_300.jsonl
-  - data_loaders/data/ft_tool_300.jsonl
-  - data_loaders/data/ft_counter_300.jsonl
+    - finetune/data/generated_from_failures_fixed.jsonl
+    - data_loaders/data/ft_math_300.jsonl
+    - data_loaders/data/ft_factual_300.jsonl
+    - data_loaders/data/ft_tool_300.jsonl
+    - data_loaders/data/ft_counter_300.jsonl
   output: finetune/data/targeted_dataset_v4_run.jsonl
-
