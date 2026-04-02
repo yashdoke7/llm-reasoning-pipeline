@@ -34,31 +34,153 @@ This pipeline introduces **step-level chain-of-thought evaluation** that:
 
 ## 🏆 Results
 
-### Model Comparison (33 tasks across 4 reasoning categories)
+### PPT Benchmark Snapshot (Groq 8B Judge, 8 Samples/Category)
 
-| Model | Step Failure Rate | Final Accuracy | Error Propagation | Hallucination Rate |
-|:------|:-----------------:|:--------------:|:-----------------:|:------------------:|
-| **Qwen 2.5 3B (Fine-tuned Q4)** | **4.0%** ✅ | **66.7%** | 100% | **0%** |
-| Qwen 2.5 3B (Base + Mitigation) | 13.9% | 69.7% | 66.7% | — |
-| Qwen 2.5 3B (Base) | 10.1% | 66.7% | 80.0% | — |
-| Llama 3.1 8B (+ Mitigation) | 8.1% | 66.7% | 90.9% | — |
+Source artifact: `outputs/final_results_for_ppt_2026-03-31/sanity_3b_targeted_v3_groq8b_8.json`
 
-### Key Findings
+| Model | Step Failure Rate | Final Accuracy | Error Propagation |
+|:------|:-----------------:|:--------------:|:-----------------:|
+| Qwen 2.5 3B (Base) | 4.50% | 87.5% | 50.0% |
+| **Qwen 2.5 3B Targeted-v3 (Fine-tuned)** | **2.34%** | **90.6%** | 66.7% |
 
-- **63% reduction** in step-level failure rate after QLoRA fine-tuning (10.1% → 4.0%)
-- **Zero hallucinations** in the fine-tuned model vs occasional hallucinations in base models
-- Fine-tuned 3B model achieves **lower step failure than Llama 3.1 8B** (4.0% vs 8.1%) — a model 2.7× its size
-- Quantization to Q4 (GGUF) introduces **no measurable accuracy loss** vs full-precision fine-tuned model
-- RAG mitigation improves final accuracy (+3%) but increases step failure rate — suggesting over-correction
+### Key Findings (PPT Run)
 
-### Per-Category Breakdown (Fine-tuned Q4)
+- Fine-tuned targeted-v3 reached **90.6% final accuracy** on the presentation sanity benchmark.
+- Accuracy improved from **87.5% → 90.6%** ($+3.1$ points) vs the base 3B model.
+- Step failure dropped from **4.50% → 2.34%** (almost half), indicating cleaner intermediate reasoning.
 
-| Category | Step Failure | Accuracy |
-|:---------|:-----------:|:--------:|
-| Multi-step Arithmetic | 4.6% | 60% |
-| Factual Consistency | 3.2% | 60% |
-| Tool-Use Planning | 0.0% | 100% |
-| Causal/Counterfactual | 7.1% | 50% |
+### Per-Category Accuracy (PPT Run)
+
+| Category | Base 3B | FT Targeted-v3 |
+|:---------|:-------:|:--------------:|
+| Multistep Arithmetic | 50.0% | 62.5% |
+| Factual Consistency | 100% | 100% |
+| Tool-Use Planning | 100% | 100% |
+| Causal/Counterfactual | 100% | 100% |
+
+### Professional Visuals
+
+The project includes publish-ready comparison visuals under `outputs/charts/`:
+
+![Accuracy Comparison](outputs/charts/hero_accuracy_comparison.png)
+
+![Step Failure Reduction](outputs/charts/hero_step_failure_reduction.png)
+
+> Note: This PPT snapshot is a sanity benchmark designed for fast comparability. For publication-grade conclusions, pair it with larger-sample runs in `outputs/final_*_20.json`.
+
+---
+
+## ✨ Core Capabilities
+
+- Step-level reasoning evaluation across multiple task families
+- Per-step validity checking, drift detection, and hallucination scoring
+- Failure-aware mitigation using retrieval and re-grounding
+- Targeted QLoRA fine-tuning from failure traces
+- GGUF export for fast local inference in Ollama
+- Reproducible benchmark runs with JSON output artifacts
+
+---
+
+## 🚀 End-to-End Workflow (Train → Merge → GGUF → Ollama → Test → Eval)
+
+The following sequence is the standard production flow for this project.
+
+### 0) Environment Setup
+
+```bash
+git clone https://github.com/yashdoke7/llm-reasoning-pipeline.git
+cd llm-reasoning-pipeline
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+pip install -r requirements-finetune.txt
+```
+
+Create and edit `.env`:
+
+```bash
+copy .env.example .env
+```
+
+Set at least:
+
+```env
+GROQ_API_KEY=your_key_here
+```
+
+### 1) (Optional but Recommended) Audit Training Mix
+
+```bash
+python finetune/audit_finetune_dataset.py
+```
+
+### 2) Fine-Tune (QLoRA)
+
+```bash
+python finetune/train_lora.py
+```
+
+### 3) Merge LoRA Adapter into Base Model
+
+```bash
+python finetune/merge_adapter.py
+```
+
+### 4) Build GGUF (FP16 + Quantized)
+
+Use bundled `llama.cpp` in repo root (already present here), or pass your own path.
+
+```bash
+python finetune/quantize.py --llama-cpp-dir llama.cpp --formats Q4_K_M Q8_0
+```
+
+### 5) Create Ollama Model from GGUF
+
+Update `Modelfile.merged` to point to your GGUF file (example below uses Q4):
+
+```text
+FROM ./outputs/quantized/model_q4_k_m.gguf
+```
+
+Then create the model:
+
+```bash
+ollama create qwen2.5-3b-ft-q4 -f Modelfile.merged
+```
+
+### 6) Smoke Test (2+2)
+
+```bash
+ollama run qwen2.5-3b-ft-q4 "Solve quickly: 2+2 = ?"
+```
+
+### 7) Evaluation (Groq 8B Instant, 8 Samples)
+
+Use 8-sample testing with `llama-3.1-8b-instant` as both solver and judge:
+
+```bash
+python experiments/run_baseline_eval.py \
+        --provider groq \
+        --models llama-3.1-8b-instant \
+        --judge-provider groq \
+        --judge-model llama-3.1-8b-instant \
+        --samples 8 \
+        --no-wandb \
+        --mitigation-metrics none
+```
+
+If you want to evaluate your local fine-tuned Ollama model while still using Groq as judge:
+
+```bash
+python experiments/run_baseline_eval.py \
+        --provider ollama \
+        --models qwen2.5-3b-ft-q4 \
+        --judge-provider groq \
+        --judge-model llama-3.1-8b-instant \
+        --samples 8 \
+        --no-wandb \
+        --mitigation-metrics none
+```
 
 ---
 
