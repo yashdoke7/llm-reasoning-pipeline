@@ -13,8 +13,10 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import time
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -62,6 +64,48 @@ def setup_logging(cfg: dict) -> None:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _message_content(task_dict: dict, role: str) -> str:
+    msgs = task_dict.get("messages", [])
+    if not isinstance(msgs, list):
+        return ""
+    for m in msgs:
+        if isinstance(m, dict) and str(m.get("role", "")).lower() == role:
+            return str(m.get("content", "")).strip()
+    return ""
+
+
+def _extract_final_answer_from_text(text: str) -> str:
+    if not text:
+        return ""
+    m = re.search(r"Final\s+Answer\s*[:\-]\s*(.+)", text, flags=re.IGNORECASE | re.DOTALL)
+    if m:
+        ans = m.group(1).strip()
+        return ans.splitlines()[0].strip() if ans else ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return lines[-1] if lines else ""
+
+
+def _extract_steps_from_text(text: str) -> list[str]:
+    if not text:
+        return []
+    matches = re.findall(
+        r"(?:^|\n)\s*(?:Step\s+)?\d+[.:)]\s*(.+?)(?=\n\s*(?:Step\s+)?\d+[.:)]|$)",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return [m.strip() for m in matches if m and m.strip()]
+
+
+def _infer_tools_from_goal(goal: str) -> list[dict]:
+    # Parse snippets like: "using tools search_web, read_file, write_file"
+    m = re.search(r"using\s+tools?\s+(.+)$", goal or "", flags=re.IGNORECASE)
+    if not m:
+        return []
+    tail = m.group(1).strip().rstrip(".")
+    names = [x.strip(" .") for x in tail.split(",") if x.strip(" .")]
+    return [{"name": n, "description": "", "params": []} for n in names]
 
 
 def _dataset_source_summary(category: str, cfg: dict) -> dict:
@@ -128,6 +172,32 @@ def load_category_tasks(category: str, cfg: dict) -> list[dict]:
     ds_cfg = cfg["datasets"]
     n = cfg["eval"]["samples_per_category"]
 
+    eval_source_files = cfg.get("dataset", {}).get("eval_source_files", [])
+    if eval_source_files:
+        all_by_cat: dict[str, list] = defaultdict(list)
+        for fpath in eval_source_files:
+            p = Path(fpath)
+            if not p.exists():
+                logger.warning(f"Frozen eval file not found: {fpath}")
+                continue
+            with open(p, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if row.get("category") == category:
+                        all_by_cat[category].append(row)
+
+        pool = sorted(all_by_cat.get(category, []), key=lambda row: str(row.get("id", "")))
+        if pool:
+            selected = pool[: min(n, len(pool))]
+            logger.info(f"Loaded {len(selected)} frozen tasks for '{category}'")
+            return selected
+
     if category == "multistep_arithmetic":
         samples = load_gsm8k(
             split=ds_cfg["gsm8k"]["split"],
@@ -170,23 +240,37 @@ def load_category_tasks(category: str, cfg: dict) -> list[dict]:
 
 def task_to_decomposer_fields(task_dict: dict, category: str) -> dict:
     """Extract the fields needed by TaskDecomposer.build for a given category."""
+    user_msg = _message_content(task_dict, "user")
     if category == "multistep_arithmetic":
-        return {"question": task_dict["question"]}
+        question = task_dict.get("question") or task_dict.get("prompt") or user_msg
+        return {"question": question}
     elif category == "factual_consistency":
-        return {"context": task_dict["context"], "questions": task_dict["questions"]}
+        context = task_dict.get("context") or user_msg or "Claim verification task."
+        questions = task_dict.get("questions")
+        if not isinstance(questions, list) or not questions:
+            q = task_dict.get("question") or user_msg or "Is this statement correct?"
+            questions = [q]
+        return {"context": context, "questions": questions}
     elif category == "tool_use_planning":
+        goal = task_dict.get("goal") or user_msg
+        available_tools = task_dict.get("available_tools")
+        if not isinstance(available_tools, list) or not available_tools:
+            available_tools = _infer_tools_from_goal(goal)
         return {
-            "goal": task_dict["goal"],
-            "available_tools": task_dict["available_tools"],
+            "goal": goal,
+            "available_tools": available_tools,
             "constraints": task_dict.get("constraints", []),
         }
     elif category == "causal_counterfactual":
+        premise = task_dict.get("premise") or user_msg
+        question = task_dict.get("question") or user_msg
         return {
-            "premise": task_dict["premise"],
-            "question": task_dict["question"],
+            "premise": premise,
+            "question": question,
         }
     elif category == "physics_reasoning":
-        return {"question": task_dict["question"]}
+        question = task_dict.get("question") or task_dict.get("prompt") or user_msg
+        return {"question": question}
     return {}
 
 
@@ -205,19 +289,37 @@ def ground_truth_for_category(task_dict: dict, category: str) -> str:
             return f"Call {tool}"
         return str(step)
 
+    assistant_msg = _message_content(task_dict, "assistant")
+    assistant_final = _extract_final_answer_from_text(assistant_msg)
+
     if category == "multistep_arithmetic":
-        return task_dict.get("ground_truth", "")
+        return (
+            task_dict.get("ground_truth")
+            or task_dict.get("answer")
+            or task_dict.get("correct_answer")
+            or assistant_final
+            or ""
+        )
     elif category == "factual_consistency":
         answers = task_dict.get("answers", [])
-        return "; ".join(answers) if answers else ""
+        if answers:
+            return "; ".join(answers)
+        return (
+            task_dict.get("correct_answer")
+            or task_dict.get("ground_truth")
+            or assistant_final
+            or ""
+        )
     elif category == "causal_counterfactual":
-        return task_dict.get("correct_answer", "")
+        return task_dict.get("correct_answer") or task_dict.get("ground_truth") or assistant_final or ""
     elif category == "tool_use_planning":
         steps = task_dict.get("correct_plan", [])
+        if not steps:
+            steps = _extract_steps_from_text(assistant_msg)
         step_text = [_tool_step_to_text(s) for s in steps]
         return " | ".join(step_text) if step_text else "Plan complete."
     elif category == "physics_reasoning":
-        return task_dict.get("ground_truth", "")
+        return task_dict.get("ground_truth") or task_dict.get("correct_answer") or assistant_final or ""
     return ""
 
 
@@ -431,6 +533,8 @@ def main() -> None:
     parser.add_argument("--judge-model", default=None,
                         help="Model ID for the judge (used with --judge-provider). "
                              "Examples: gpt-4o-mini, gpt-4o, qwen2.5:14b")
+    parser.add_argument("--sample-manifest", default=None,
+                        help="Optional frozen sample manifest JSON for exact task IDs.")
     parser.add_argument(
         "--mitigation-metrics",
         choices=["none", "rag", "reprompt", "best"],
@@ -455,6 +559,11 @@ def main() -> None:
     categories = args.categories or cfg["eval"]["categories"]
     models = args.models or [m["id"] for m in cfg["models"]["eval_models"]]
     model_display = {m["id"]: m["display_name"] for m in cfg["models"]["eval_models"]}
+    sample_manifest_path = args.sample_manifest or cfg.get("dataset", {}).get("eval_sample_manifest")
+    sample_manifest = None
+    if sample_manifest_path and os.path.exists(sample_manifest_path):
+        with open(sample_manifest_path, encoding="utf-8") as f:
+            sample_manifest = json.load(f)
 
     use_wandb = not args.no_wandb
     run_mitigation = not args.no_mitigation
@@ -543,6 +652,11 @@ def main() -> None:
     dataset_sources: dict[str, dict] = {}
     for cat in categories:
         tasks = load_category_tasks(cat, cfg)
+        if sample_manifest:
+            wanted_ids = sample_manifest.get("test_sample_ids", {}).get(cat, {}).get(str(cfg["eval"]["samples_per_category"]))
+            if wanted_ids:
+                lookup = {str(t.get("id", "")): t for t in tasks}
+                tasks = [lookup[i] for i in wanted_ids if i in lookup]
         category_tasks[cat] = tasks
         dataset_sources[cat] = _dataset_source_summary(cat, cfg)
         logger.info(f"  {cat}: {len(tasks)} tasks loaded")
@@ -656,6 +770,7 @@ def main() -> None:
         "samples_per_category": cfg["eval"]["samples_per_category"],
         "mitigation_enabled": run_mitigation,
         "mitigation_metrics_mode": args.mitigation_metrics,
+        "sample_manifest": sample_manifest_path,
         "dataset_sources": dataset_sources,
         "tasks_attempted": attempted_tasks,
         "tasks_completed": completed_tasks,

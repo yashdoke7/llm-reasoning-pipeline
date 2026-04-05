@@ -54,6 +54,10 @@ eval:
     - tool_use_planning
     - causal_counterfactual
 datasets:
+  train_source_files:
+    - outputs/frozen_train_dataset.jsonl
+  eval_source_files:
+    - outputs/frozen_test_dataset.jsonl
   gsm8k:
     split: test
     max_samples: 200
@@ -142,10 +146,10 @@ logging:
   format: '%(asctime)s | %(name)s | %(levelname)s | %(message)s'
   file: logs/pipeline.log
 dataset:
+  train_source_files:
+    - outputs/frozen_train_dataset.jsonl
+  eval_source_files:
+    - outputs/frozen_test_dataset.jsonl
   source_files:
-    - finetune/data/generated_from_failures_fixed.jsonl
-    - data_loaders/data/ft_math_300.jsonl
-    - data_loaders/data/ft_factual_300.jsonl
-    - data_loaders/data/ft_tool_300.jsonl
-    - data_loaders/data/ft_counter_300.jsonl
+    - outputs/frozen_train_dataset.jsonl
   output: finetune/data/targeted_dataset_v4_run.jsonl

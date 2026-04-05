@@ -1,1 +1,1 @@
-FROM ./outputs/quantized_3b_targeted_v3/model_fp16.gguf
+FROM ./outputs/quantized/model_fp16.gguf

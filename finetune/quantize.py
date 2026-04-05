@@ -1,7 +1,7 @@
 """
 finetune/quantize.py
 Converts a merged HuggingFace model to GGUF format using llama.cpp.
-Produces Q4_K_M and Q8_0 quantized versions for benchmarking.
+Supports FP16-only export, or optional quantized variants for benchmarking.
 
 Prerequisites:
     git clone https://github.com/ggerganov/llama.cpp
@@ -12,7 +12,7 @@ Then set LLAMA_CPP_DIR env var or pass --llama-cpp-dir
 
 Run:
     export LLAMA_CPP_DIR=/path/to/llama.cpp
-    python finetune/quantize.py
+    python finetune/quantize.py --fp16-only
     python finetune/quantize.py --model outputs/merged_model --formats Q4_K_M Q8_0
 """
 from __future__ import annotations
@@ -138,7 +138,7 @@ def run_quantization(
     # Convert to FP16 first
     fp16_path = convert_to_fp16_gguf(model_path, llama_dir, output_dir)
 
-    # Quantize to each format
+    # Quantize to each format (if requested)
     results = {"fp16": fp16_path}
     for quant_type in quant_formats:
         try:
@@ -169,6 +169,7 @@ def main() -> None:
     parser.add_argument("--config", default="configs/config.yaml")
     parser.add_argument("--model", default=None, help="Path to merged HF model")
     parser.add_argument("--formats", nargs="+", default=None, help="Quantization formats (e.g. Q4_K_M Q8_0)")
+    parser.add_argument("--fp16-only", action="store_true", help="Only export FP16 GGUF, skip Q4/Q8 quantization")
     parser.add_argument("--output", default=None, help="Output directory for GGUF files")
     parser.add_argument("--llama-cpp-dir", default=None, help="Path to llama.cpp directory")
     args = parser.parse_args()
@@ -180,7 +181,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
     model_path = args.model or os.path.join(cfg["paths"]["outputs"], "merged_model")
-    formats = args.formats or [f["name"] for f in cfg["finetune"]["quantization"]["formats"]]
+    formats = [] if args.fp16_only else (args.formats or [f["name"] for f in cfg["finetune"]["quantization"]["formats"]])
     output = args.output or cfg["finetune"]["quantization"]["output_dir"]
 
     run_quantization(

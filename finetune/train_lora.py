@@ -30,6 +30,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 # ── dataset helpers ────────────────────────────────────────────────────────────
@@ -460,7 +461,7 @@ def _generate_axolotl_config(cfg: dict, dataset_path: str, output_dir: str):
 
 def parse_args():
     p = argparse.ArgumentParser(description="Fine-tune with targeted LoRA dataset")
-    p.add_argument("--config", default="config_3b.yaml")
+    p.add_argument("--config", default="configs/config.yaml")
     p.add_argument("--model",  default=None, help="Base model name override")
     p.add_argument("--data",   default=None, help="Training JSONL path override")
     p.add_argument("--output", default=None, help="Output checkpoint dir override")
@@ -476,7 +477,15 @@ def main():
 
     cfg_path = Path(args.config)
     if not cfg_path.exists():
-        logger.error(f"Config not found: {cfg_path}")
+        # Allow running from any cwd by resolving relative to project root.
+        cfg_path = PROJECT_ROOT / args.config
+
+    if not cfg_path.exists():
+        logger.error(
+            "Config not found: %s\n"
+            "Try: python finetune/train_lora.py --config configs/config.yaml",
+            args.config,
+        )
         sys.exit(1)
 
     with open(cfg_path, encoding="utf-8") as f:
@@ -490,7 +499,7 @@ def main():
     target_category = args.target_category or ft_cfg.get("target_category", "multistep_arithmetic")
     target_ratio    = ft_cfg.get("target_ratio", 0.70)
     n_total         = ft_cfg.get("total_samples", 400)
-    source_files    = data_cfg.get("source_files", [])
+    source_files    = data_cfg.get("train_source_files", data_cfg.get("source_files", []))
     dataset_output  = args.data or data_cfg.get("output", "finetune/data/targeted_dataset.jsonl")
     checkpoint_dir  = args.output or f"finetune/checkpoints/{ft_cfg.get('output_model', 'finetuned-v3')}"
 

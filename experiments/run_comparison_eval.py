@@ -21,6 +21,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+# ── Path setup ───────────────────────────────────────────────────────────────
+_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(_ROOT))
+
+from dotenv import load_dotenv
+load_dotenv(_ROOT / ".env")
+
 import yaml
 
 # ── logging ──────────────────────────────────────────────────────────────────
@@ -36,10 +43,7 @@ logger = logging.getLogger(__name__)
 
 def make_ollama_client(cfg: dict, model: str):
     """Always returns a FRESH OllamaClient — never the cached singleton."""
-    try:
-        from models.ollama_client import OllamaClient
-    except ImportError:
-        from ollama_client import OllamaClient
+    from models.ollama_client import OllamaClient
 
     params = cfg.get("ollama", {})
     client = OllamaClient(
@@ -52,15 +56,11 @@ def make_ollama_client(cfg: dict, model: str):
 
 def make_groq_client(cfg: dict, model: str):
     """Returns a Groq client."""
-    try:
-        from models.groq_client import GroqClient
-    except ImportError:
-        from groq_client import GroqClient
+    from models.groq_client import GroqClient
 
     params = cfg.get("groq", {})
     client = GroqClient(
         api_key=os.environ.get("GROQ_API_KEY", params.get("api_key", "")),
-        model=model,
     )
     return client
 
@@ -84,12 +84,12 @@ def call_with_retry(client, prompt: str, model: str, max_retries: int = 3,
     for attempt in range(max_retries):
         try:
             response = client.complete(
-                prompt=prompt,
                 model=model,
+                user_prompt=prompt,
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
-            return response
+            return response.content
         except Exception as e:
             wait = 2 ** attempt
             logger.warning(f"Attempt {attempt+1}/{max_retries} failed: {e}. Retrying in {wait}s...")
@@ -105,7 +105,7 @@ def load_tasks(cfg: dict, categories: list[str], samples_per_cat: int) -> list[d
     data_dir = Path("finetune/data")
 
     # Try loading from existing JSONL files
-    source_files = cfg.get("dataset", {}).get("source_files", [])
+    source_files = cfg.get("dataset", {}).get("eval_source_files", cfg.get("dataset", {}).get("source_files", []))
     all_by_cat: dict[str, list] = defaultdict(list)
 
     for fpath in source_files:
@@ -113,7 +113,7 @@ def load_tasks(cfg: dict, categories: list[str], samples_per_cat: int) -> list[d
         if not p.exists():
             logger.warning(f"Dataset file not found: {fpath}")
             continue
-        with open(p) as f:
+        with open(p, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -131,8 +131,8 @@ def load_tasks(cfg: dict, categories: list[str], samples_per_cat: int) -> list[d
         if len(pool) == 0:
             logger.warning(f"No tasks found for category '{cat}' — will skip")
             continue
-        import random
-        selected = random.sample(pool, min(samples_per_cat, len(pool)))
+        pool = sorted(pool, key=lambda row: str(row.get("id", "")))
+        selected = pool[: min(samples_per_cat, len(pool))]
         tasks.extend(selected)
         logger.info(f"  Loaded {len(selected)} tasks for '{cat}'")
 
@@ -361,7 +361,7 @@ def build_failure_report(
 
 def parse_args():
     p = argparse.ArgumentParser(description="Compare base vs fine-tuned model")
-    p.add_argument("--config", default="config_3b.yaml", help="YAML config file")
+    p.add_argument("--config", default="configs/config.yaml", help="YAML config file")
     p.add_argument("--models", nargs=2, metavar=("BASE", "FINETUNED"),
                    help="Override model names from config")
     p.add_argument("--judge-provider", default=None,
@@ -391,7 +391,7 @@ def main():
         logger.error(f"Config not found: {cfg_path}")
         sys.exit(1)
 
-    with open(cfg_path) as f:
+    with open(cfg_path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
     eval_cfg = cfg.get("evaluation", {})
@@ -466,7 +466,7 @@ def main():
     manifest_path = out_dir / f"run_manifest_{tag}.json"
     failure_path  = out_dir / f"failure_report_{tag}.json"
 
-    with open(raw_path, "w") as f:
+    with open(raw_path, "w", encoding="utf-8") as f:
         json.dump(all_raw_results, f, indent=2)
 
     manifest = {
@@ -484,10 +484,10 @@ def main():
         # note: usage tracking is now separate per client instance
         "note": "solver and judge are separate client instances (singleton bug fixed)",
     }
-    with open(manifest_path, "w") as f:
+    with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
 
-    with open(failure_path, "w") as f:
+    with open(failure_path, "w", encoding="utf-8") as f:
         json.dump(failure_report, f, indent=2)
 
     # ── Print summary ─────────────────────────────────────────────────────────
@@ -506,4 +506,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()  

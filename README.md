@@ -108,9 +108,12 @@ Set at least:
 GROQ_API_KEY=your_key_here
 ```
 
-### 1) (Optional but Recommended) Audit Training Mix
+### 1) Build Frozen Splits and Audit Training Mix
+
+Create deterministic train/validation/test splits first, then audit the training mix.
 
 ```bash
+python data_loaders/build_frozen_splits.py --input outputs/finetune_dataset_normalized.jsonl --output-dir outputs
 python finetune/audit_finetune_dataset.py
 ```
 
@@ -126,32 +129,32 @@ python finetune/train_lora.py
 python finetune/merge_adapter.py
 ```
 
-### 4) Build GGUF (FP16 + Quantized)
+### 4) Build GGUF (FP16 Only)
 
 Use bundled `llama.cpp` in repo root (already present here), or pass your own path.
 
 ```bash
-python finetune/quantize.py --llama-cpp-dir llama.cpp --formats Q4_K_M Q8_0
+python finetune/quantize.py --llama-cpp-dir llama.cpp --fp16-only
 ```
 
 ### 5) Create Ollama Model from GGUF
 
-Update `Modelfile.merged` to point to your GGUF file (example below uses Q4):
+Update `Modelfile.merged` to point to your FP16 GGUF file:
 
 ```text
-FROM ./outputs/quantized/model_q4_k_m.gguf
+FROM ./outputs/quantized/model_fp16.gguf
 ```
 
 Then create the model:
 
 ```bash
-ollama create qwen2.5-3b-ft-q4 -f Modelfile.merged
+ollama create qwen2.5-3b-ft-fp16 -f Modelfile.merged
 ```
 
 ### 6) Smoke Test (2+2)
 
 ```bash
-ollama run qwen2.5-3b-ft-q4 "Solve quickly: 2+2 = ?"
+ollama run qwen2.5-3b-ft-fp16 "Solve quickly: 2+2 = ?"
 ```
 
 ### 7) Evaluation (Groq 8B Instant, 8 Samples)
@@ -174,13 +177,15 @@ If you want to evaluate your local fine-tuned Ollama model while still using Gro
 ```bash
 python experiments/run_baseline_eval.py \
         --provider ollama \
-        --models qwen2.5-3b-ft-q4 \
+        --models qwen2.5-3b-ft-fp16 \
         --judge-provider groq \
         --judge-model llama-3.1-8b-instant \
         --samples 8 \
         --no-wandb \
         --mitigation-metrics none
 ```
+
+The evaluation harness now reads from `outputs/frozen_test_dataset.jsonl` and takes the first `N` items per category in sorted order, so the 8-sample and 20-sample comparisons stay fixed across reruns.
 
 ---
 
