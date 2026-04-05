@@ -464,7 +464,11 @@ def parse_args():
     p.add_argument("--config", default="configs/config.yaml")
     p.add_argument("--model",  default=None, help="Base model name override")
     p.add_argument("--data",   default=None, help="Training JSONL path override")
+    p.add_argument("--source-files", nargs="+", default=None,
+                   help="Override source JSONL files used to build targeted dataset")
     p.add_argument("--output", default=None, help="Output checkpoint dir override")
+    p.add_argument("--use-prebuilt-dataset", action="store_true",
+                   help="Use --data as final training dataset directly (skip targeted dataset rebuilding)")
     p.add_argument("--build-dataset-only", action="store_true",
                    help="Only build the targeted dataset, don't train")
     p.add_argument("--target-category", default=None,
@@ -499,7 +503,7 @@ def main():
     target_category = args.target_category or ft_cfg.get("target_category", "multistep_arithmetic")
     target_ratio    = ft_cfg.get("target_ratio", 0.70)
     n_total         = ft_cfg.get("total_samples", 400)
-    source_files    = data_cfg.get("train_source_files", data_cfg.get("source_files", []))
+    source_files    = args.source_files or data_cfg.get("train_source_files", data_cfg.get("source_files", []))
     dataset_output  = args.data or data_cfg.get("output", "finetune/data/targeted_dataset.jsonl")
     checkpoint_dir  = args.output or f"finetune/checkpoints/{ft_cfg.get('output_model', 'finetuned-v3')}"
 
@@ -512,21 +516,41 @@ def main():
     logger.info(f"  Checkpoint dir:   {checkpoint_dir}")
     logger.info("=" * 60)
 
-    # Step 1: Build targeted dataset from existing files
-    dataset = build_targeted_dataset(
-        source_files=source_files,
-        target_category=target_category,
-        target_ratio=target_ratio,
-        n_total=n_total,
-        output_path=dataset_output,
-    )
+    if args.use_prebuilt_dataset:
+        if not args.data:
+            logger.error("--use-prebuilt-dataset requires --data <jsonl_path>.")
+            sys.exit(1)
+        if not Path(args.data).exists():
+            logger.error(f"Prebuilt dataset not found: {args.data}")
+            sys.exit(1)
 
-    # Step 2: Validate distribution
-    validate_dataset(dataset, target_category, target_ratio)
+        logger.info(f"Using prebuilt dataset: {args.data}")
+        dataset = load_jsonl(args.data)
+        if not dataset:
+            logger.error(f"Prebuilt dataset is empty: {args.data}")
+            sys.exit(1)
 
-    # Step 3: Save in Alpaca format for training frameworks
-    alpaca_path = Path(dataset_output).with_suffix(".alpaca.jsonl")
-    save_as_alpaca_jsonl(dataset, alpaca_path)
+        # Still log distribution against current target category for visibility.
+        validate_dataset(dataset, target_category, target_ratio)
+
+        alpaca_path = Path(args.data).with_suffix(".alpaca.jsonl")
+        save_as_alpaca_jsonl(dataset, alpaca_path)
+    else:
+        # Step 1: Build targeted dataset from source files
+        dataset = build_targeted_dataset(
+            source_files=source_files,
+            target_category=target_category,
+            target_ratio=target_ratio,
+            n_total=n_total,
+            output_path=dataset_output,
+        )
+
+        # Step 2: Validate distribution
+        validate_dataset(dataset, target_category, target_ratio)
+
+        # Step 3: Save in Alpaca format for training frameworks
+        alpaca_path = Path(dataset_output).with_suffix(".alpaca.jsonl")
+        save_as_alpaca_jsonl(dataset, alpaca_path)
 
     if args.build_dataset_only:
         logger.info("--build-dataset-only set. Stopping before training.")

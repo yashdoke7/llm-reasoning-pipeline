@@ -219,6 +219,7 @@ def _failure_score(result: dict) -> tuple[int, list[str]]:
 def _extract_failure_tasks(
     raw_results_path: str,
     include_categories: Optional[set[str]] = None,
+    model_filter: Optional[str] = None,
     max_tasks: Optional[int] = None,
 ) -> list[dict]:
     if not os.path.exists(raw_results_path):
@@ -231,7 +232,16 @@ def _extract_failure_tasks(
     extracted: list[dict] = []
     seen: set[tuple[str, str]] = set()
 
+    if model_filter and model_filter not in raw:
+        available = ", ".join(sorted(raw.keys()))
+        raise ValueError(
+            f"Model '{model_filter}' not found in {raw_results_path}. "
+            f"Available model keys: [{available}]"
+        )
+
     for model_name, by_category in raw.items():
+        if model_filter and model_name != model_filter:
+            continue
         if not isinstance(by_category, dict):
             continue
         for category, task_results in by_category.items():
@@ -271,6 +281,118 @@ def _extract_failure_tasks(
         f"Extracted {len(extracted)} failure tasks from {raw_results_path}"
     )
     return extracted
+
+
+def _compute_model_category_accuracy(
+    raw_results_path: str,
+    model_filter: str,
+    include_categories: Optional[set[str]] = None,
+) -> dict[str, float]:
+    raw = _load_json(raw_results_path)
+    if model_filter not in raw:
+        available = ", ".join(sorted(raw.keys()))
+        raise ValueError(
+            f"Model '{model_filter}' not found in {raw_results_path}. "
+            f"Available model keys: [{available}]"
+        )
+
+    by_category = raw.get(model_filter, {}) or {}
+    accuracy: dict[str, float] = {}
+
+    for category, task_results in by_category.items():
+        if include_categories and category not in include_categories:
+            continue
+
+        total = 0
+        correct = 0
+        for item in task_results or []:
+            ev = item.get("evaluation", {}) or {}
+            fac = ev.get("final_answer_correct")
+            if fac is None:
+                continue
+            total += 1
+            if fac is True:
+                correct += 1
+
+        if total > 0:
+            accuracy[category] = correct / total
+
+    return accuracy
+
+
+def _rebalance_by_baseline_accuracy(
+    tasks: list[dict],
+    selected_categories: list[str],
+    raw_results_path: str,
+    baseline_model: str,
+    target_size: int,
+) -> list[dict]:
+    if not tasks or target_size <= 0:
+        return tasks
+
+    grouped: dict[str, list[dict]] = {}
+    for task in tasks:
+        cat = task.get("category")
+        if not cat:
+            continue
+        grouped.setdefault(cat, []).append(task)
+
+    usable_categories = [c for c in selected_categories if grouped.get(c)]
+    if not usable_categories:
+        return tasks
+
+    accuracy = _compute_model_category_accuracy(
+        raw_results_path=raw_results_path,
+        model_filter=baseline_model,
+        include_categories=set(usable_categories),
+    )
+
+    # Higher baseline error rate gets more fine-tune samples.
+    deficits = {cat: max(0.05, 1.0 - accuracy.get(cat, 0.0)) for cat in usable_categories}
+    total_deficit = sum(deficits.values()) or 1.0
+
+    quotas: dict[str, int] = {}
+    for cat in usable_categories:
+        quotas[cat] = int(target_size * (deficits[cat] / total_deficit))
+
+    assigned = sum(quotas.values())
+    if assigned < target_size:
+        order = sorted(
+            usable_categories,
+            key=lambda c: deficits[c],
+            reverse=True,
+        )
+        i = 0
+        while assigned < target_size:
+            quotas[order[i % len(order)]] += 1
+            assigned += 1
+            i += 1
+
+    balanced: list[dict] = []
+    for cat in usable_categories:
+        pool = grouped[cat]
+        need = quotas.get(cat, 0)
+        if need <= 0:
+            continue
+        if len(pool) >= need:
+            balanced.extend(random.sample(pool, need))
+        else:
+            balanced.extend(random.choice(pool) for _ in range(need))
+
+    if not balanced:
+        return tasks
+
+    random.shuffle(balanced)
+
+    logger.info("Baseline-accuracy-balanced task quotas:")
+    for cat in usable_categories:
+        acc = accuracy.get(cat)
+        acc_txt = f"{acc:.3f}" if acc is not None else "n/a"
+        logger.info(
+            f"  {cat}: quota={quotas.get(cat, 0)} | baseline_accuracy={acc_txt}"
+        )
+
+    return balanced
 
 
 def _resolve_target_category(category_arg: Optional[str], cfg: dict) -> str:
@@ -330,6 +452,8 @@ def _build_task_pool(
     category: Optional[str],
     categories: Optional[list[str]],
     raw_results_path: str,
+    model_filter: Optional[str],
+    baseline_balance_model: Optional[str],
     max_failure_tasks: Optional[int],
 ) -> tuple[str, list[dict]]:
     selected_categories = categories or DEFAULT_CATEGORIES
@@ -342,8 +466,17 @@ def _build_task_pool(
         tasks = _extract_failure_tasks(
             raw_results_path=raw_results_path,
             include_categories=selected_set,
+            model_filter=model_filter,
             max_tasks=max_failure_tasks,
         )
+        if baseline_balance_model and len(selected_set) > 1:
+            tasks = _rebalance_by_baseline_accuracy(
+                tasks=tasks,
+                selected_categories=selected_categories,
+                raw_results_path=raw_results_path,
+                baseline_model=baseline_balance_model,
+                target_size=target_size,
+            )
         return ("mixed" if len(selected_set) > 1 else next(iter(selected_set))), tasks
 
     if strategy == "category":
@@ -364,6 +497,7 @@ def _build_task_pool(
         failure_tasks = _extract_failure_tasks(
             raw_results_path=raw_results_path,
             include_categories=selected_set,
+            model_filter=model_filter,
             max_tasks=max_failure_tasks,
         )
         reserve = min(len(failure_tasks), max(1, int(target_size * 0.6)))
@@ -374,6 +508,14 @@ def _build_task_pool(
             topup = _load_category_pool(cfg_for_load, selected_categories, per)
             random.shuffle(topup)
             seed.extend(topup[:needed])
+        if baseline_balance_model and len(selected_set) > 1:
+            seed = _rebalance_by_baseline_accuracy(
+                tasks=seed,
+                selected_categories=selected_categories,
+                raw_results_path=raw_results_path,
+                baseline_model=baseline_balance_model,
+                target_size=target_size,
+            )
         return "mixed", seed
 
     raise ValueError(f"Unknown strategy: {strategy}")
@@ -536,6 +678,16 @@ def main() -> None:
     parser.add_argument("--provider", choices=["groq", "ollama", "openai"], default="ollama")
     parser.add_argument("--trace-model", default=None)
     parser.add_argument("--raw-results", default=None, help="Path to raw_results.json for failure mining")
+    parser.add_argument(
+        "--model-filter",
+        default=None,
+        help="Only mine failures from this model key in raw_results.json (recommended for baseline-first datasets).",
+    )
+    parser.add_argument(
+        "--baseline-balance-model",
+        default=None,
+        help="Model key used to weight category quotas by baseline accuracy deficit.",
+    )
     parser.add_argument("--max-failure-tasks", type=int, default=None, help="Cap mined failures before expansion")
     parser.add_argument("--random-seed", type=int, default=42)
     parser.add_argument(
@@ -598,6 +750,8 @@ def main() -> None:
         category=args.category,
         categories=args.categories,
         raw_results_path=raw_results_path,
+        model_filter=args.model_filter,
+        baseline_balance_model=args.baseline_balance_model,
         max_failure_tasks=args.max_failure_tasks,
     )
 
