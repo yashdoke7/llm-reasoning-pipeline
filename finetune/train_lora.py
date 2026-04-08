@@ -135,6 +135,28 @@ def validate_dataset(dataset: list[dict], target_category: str, target_ratio: fl
         logger.info(f"Dataset ratio check passed: {target_category} = {actual_ratio:.2f}")
 
 
+def summarize_dataset(dataset: list[dict], target_category: str) -> dict[str, float | int]:
+    by_cat: dict[str, int] = defaultdict(int)
+    for row in dataset:
+        by_cat[row.get("category", "unknown")] += 1
+
+    total = len(dataset)
+    target_count = by_cat.get(target_category, 0)
+    target_ratio = (target_count / total) if total else 0.0
+
+    logger.info("Effective dataset distribution:")
+    for cat, count in sorted(by_cat.items()):
+        pct = (100.0 * count / total) if total else 0.0
+        marker = " ← TARGET" if cat == target_category else ""
+        logger.info(f"  {cat}: {count} ({pct:.1f}%){marker}")
+
+    return {
+        "total": total,
+        "target_count": target_count,
+        "target_ratio": target_ratio,
+    }
+
+
 # ── Ollama-based training (via unsloth or direct fine-tune) ────────────────────
 
 def format_training_prompt(row: dict) -> str:
@@ -529,6 +551,12 @@ def main():
         if not dataset:
             logger.error(f"Prebuilt dataset is empty: {args.data}")
             sys.exit(1)
+
+        effective = summarize_dataset(dataset, target_category)
+        logger.info(
+            f"Using prebuilt dataset size: {effective['total']} rows | "
+            f"target={target_category} ({effective['target_ratio']:.2f})"
+        )
 
         # Still log distribution against current target category for visibility.
         validate_dataset(dataset, target_category, target_ratio)
