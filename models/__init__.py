@@ -11,9 +11,6 @@ Solver vs Judge pattern:
     solver_client = get_client(cfg, provider="ollama")   # generates reasoning
     judge_client  = get_client(cfg, provider="openai")   # grades each step
 """
-from models.groq_client import get_client as _get_groq_client, LLMResponse
-
-
 def get_client(cfg=None, provider=None):
     """
     Factory: returns a GroqClient, OllamaClient, or OpenAIClient.
@@ -34,4 +31,5 @@ def get_client(cfg=None, provider=None):
         from models.openai_client import get_openai_client
         return get_openai_client(cfg)
 
-    return _get_groq_client(cfg)
+    from models.groq_client import get_client as get_groq_client
+    return get_groq_client(cfg)

@@ -20,6 +20,7 @@ docs/4) Internship_WorkbookFinal 2024-25 (1).docx
 docs/internship_report_detailed.md
 docs/presentation_final.md
 docs/Speech.txt
+docs/RESEARCH_READINESS_ROADMAP.md
 
 # Python temp
 __pycache__/
@@ -47,11 +48,22 @@ Modelfile.*
 configs/config_3b*.yaml
 finetune/make_targeted_dataset.py
 
-# Results/Outputs (Keeping the final sanity logs you like)
 outputs/
-!outputs/final_results_for_ppt_2026-03-31/sanity_3b_targeted_v3_groq8b_8.json
-!outputs/charts/
-!outputs/final_results_for_ppt_2026-03-31/RESULTS_INDEX.txt
+
+# Results/Outputs (ignore transient artifacts, keep canonical evaluation assets)
+# outputs/*
+# !outputs/charts/
+# !outputs/charts/**
+# !outputs/final_results_for_ppt_2026-03-31/
+# !outputs/final_results_for_ppt_2026-03-31/**
+# !outputs/final_fixed8_groq8b.json
+# !outputs/final_fixed20_groq8b.json
+# !outputs/final_fixed8_ollama14b.json
+# !outputs/final_fixed20_ollama14b.json
+# !outputs/frozen_eval_manifest.json
+# !outputs/frozen_train_dataset.jsonl
+# !outputs/frozen_val_dataset.jsonl
+# !outputs/frozen_test_dataset.jsonl
 
 Modelfile.merged
 
