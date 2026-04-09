@@ -300,9 +300,14 @@ class MetricsAggregator:
         Identify which (model, category) combinations have the highest failure rates.
         Used to select fine-tuning targets.
         """
+        # Composite weakness score prioritizes final-answer failures while still
+        # considering step failures and propagation.
+        def weakness(m) -> float:
+            return (0.45 * m.step_failure_rate) + (0.40 * (1.0 - m.final_accuracy)) + (0.15 * m.error_propagation_rate)
+
         ranked = sorted(
             self._metrics.values(),
-            key=lambda m: m.step_failure_rate,
+            key=weakness,
             reverse=True,
         )
         worst = [
@@ -310,7 +315,9 @@ class MetricsAggregator:
                 "model": m.model_name,
                 "category": m.category,
                 "step_failure_rate": round(m.step_failure_rate, 4),
+                "final_accuracy": round(m.final_accuracy, 4),
                 "error_propagation_rate": round(m.error_propagation_rate, 4),
+                "weakness_score": round(weakness(m), 4),
                 "recommendation": f"High-priority fine-tuning target for {m.category}",
             }
             for m in ranked[:5]

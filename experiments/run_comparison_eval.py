@@ -105,7 +105,8 @@ def load_tasks(cfg: dict, categories: list[str], samples_per_cat: int) -> list[d
     data_dir = Path("finetune/data")
 
     # Try loading from existing JSONL files
-    source_files = cfg.get("dataset", {}).get("eval_source_files", cfg.get("dataset", {}).get("source_files", []))
+    dataset_cfg = cfg.get("dataset", {}) or cfg.get("datasets", {}) or {}
+    source_files = dataset_cfg.get("eval_source_files", dataset_cfg.get("source_files", []))
     all_by_cat: dict[str, list] = defaultdict(list)
 
     for fpath in source_files:
@@ -229,7 +230,7 @@ def evaluate_model(
     results_store: list,
 ) -> dict[str, Any]:
     """Run evaluation for a single model across all tasks."""
-    eval_cfg = cfg.get("evaluation", {})
+    eval_cfg = cfg.get("evaluation", {}) or cfg.get("eval", {})
     solver_temp = eval_cfg.get("solver_temperature", 0.1)
     judge_temp = eval_cfg.get("judge_temperature", 0.0)
     max_tokens = eval_cfg.get("max_tokens", 1024)
@@ -394,7 +395,7 @@ def main():
     with open(cfg_path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
-    eval_cfg = cfg.get("evaluation", {})
+    eval_cfg = cfg.get("evaluation", {}) or cfg.get("eval", {})
     models_cfg = cfg.get("models", {})
 
     # Resolve model names
@@ -402,11 +403,11 @@ def main():
     ft_model = (args.models[1] if args.models else None) or models_cfg.get("fine_tuned", "qwen2.5-3b-targeted-v3")
 
     # Resolve judge
-    judge_provider = args.judge_provider or cfg.get("providers", {}).get("judge_provider", "ollama")
+    judge_provider = args.judge_provider or cfg.get("providers", {}).get("judge_provider") or cfg.get("provider", "ollama")
     judge_model = args.judge_model or models_cfg.get("judge", "qwen2.5:14b")
 
     # Resolve solver provider
-    solver_provider = args.solver_provider or cfg.get("providers", {}).get("solver_provider", "ollama")
+    solver_provider = args.solver_provider or cfg.get("providers", {}).get("solver_provider") or cfg.get("provider", "ollama")
 
     # Resolve categories & samples
     categories = args.categories or eval_cfg.get("categories", [

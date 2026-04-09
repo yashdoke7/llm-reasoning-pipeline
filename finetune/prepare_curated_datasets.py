@@ -87,6 +87,75 @@ def dedupe_examples(rows: list[dict]) -> list[dict]:
     return out
 
 
+def _normalize_text(text: str) -> str:
+    return " ".join(str(text or "").lower().split())
+
+
+def _user_prompt_from_row(row: dict) -> str:
+    msgs = row.get("messages") or []
+    for m in msgs:
+        if str(m.get("role", "")).strip().lower() == "user":
+            return _normalize_text(str(m.get("content", "")))
+    return ""
+
+
+def _load_eval_guard_sets() -> tuple[set[str], set[str], dict[str, int]]:
+    manifest_path = ROOT / "outputs/frozen_eval_manifest.json"
+    test_path = ROOT / "outputs/frozen_test_dataset.jsonl"
+
+    blocked_ids: set[str] = set()
+    blocked_prompts: set[str] = set()
+
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for _cat, by_n in (manifest.get("test_sample_ids", {}) or {}).items():
+            for _n, ids in (by_n or {}).items():
+                for i in ids or []:
+                    blocked_ids.add(str(i))
+
+    if test_path.exists():
+        for row in load_jsonl(test_path):
+            i = str(row.get("id", ""))
+            if i in blocked_ids:
+                p = _user_prompt_from_row(row)
+                if p:
+                    blocked_prompts.add(p)
+
+    stats = {
+        "blocked_eval_ids": len(blocked_ids),
+        "blocked_eval_prompts": len(blocked_prompts),
+    }
+    return blocked_ids, blocked_prompts, stats
+
+
+def _filter_eval_overlap(rows: list[dict], strict: bool = True) -> tuple[list[dict], dict[str, int]]:
+    blocked_ids, blocked_prompts, guard_stats = _load_eval_guard_sets()
+
+    kept: list[dict] = []
+    dropped_by_id = 0
+    dropped_by_prompt = 0
+
+    for r in rows:
+        rid = str(r.get("id", ""))
+        if rid and rid in blocked_ids:
+            dropped_by_id += 1
+            continue
+        if strict:
+            p = _user_prompt_from_row(r)
+            if p and p in blocked_prompts:
+                dropped_by_prompt += 1
+                continue
+        kept.append(r)
+
+    stats = {
+        **guard_stats,
+        "dropped_by_eval_id": dropped_by_id,
+        "dropped_by_eval_prompt": dropped_by_prompt,
+        "kept_after_leak_filter": len(kept),
+    }
+    return kept, stats
+
+
 def sample_by_quota(by_cat: dict[str, list[dict]], quotas: dict[str, int], seed: int) -> list[dict]:
     rng = random.Random(seed)
     selected: list[dict] = []
@@ -140,11 +209,20 @@ def _extract_baseline_metrics(
             f"Available models: {available}"
         )
 
+    # Pull per-category error propagation from per_run_metrics when available.
+    ep_by_cat: dict[str, float] = {}
+    for row in raw.get("per_run_metrics", []) or []:
+        if row.get("model") == chosen_model:
+            cat = row.get("category")
+            if cat:
+                ep_by_cat[str(cat)] = float(row.get("error_propagation_rate", 0.0))
+
     out: dict[str, dict[str, float]] = {}
     for cat, vals in (target.get("per_category", {}) or {}).items():
         out[cat] = {
             "step_failure_rate": float(vals.get("step_failure_rate", 0.0)),
             "final_accuracy": float(vals.get("final_accuracy", 0.0)),
+            "error_propagation_rate": float(ep_by_cat.get(cat, 0.0)),
         }
 
     return chosen_model, out
@@ -159,6 +237,9 @@ def _compute_auto_quotas(
     max_total: int,
     usage_ratio: float,
     min_per_category: int,
+    weight_step_failure: float,
+    weight_accuracy_gap: float,
+    weight_error_propagation: float,
 ) -> tuple[dict[str, int], dict[str, Any]]:
     pool_counts = {k: len(v) for k, v in pool_by_category.items()}
     baseline_model_used, baseline_metrics = _extract_baseline_metrics(
@@ -175,7 +256,12 @@ def _compute_auto_quotas(
     for cat in categories:
         sf = baseline_metrics[cat]["step_failure_rate"]
         acc = baseline_metrics[cat]["final_accuracy"]
-        raw_scores[cat] = 0.65 * sf + 0.35 * (1.0 - acc)
+        ep = baseline_metrics[cat].get("error_propagation_rate", 0.0)
+        raw_scores[cat] = (
+            weight_step_failure * sf
+            + weight_accuracy_gap * (1.0 - acc)
+            + weight_error_propagation * ep
+        )
 
     score_sum = sum(raw_scores.values()) or 1.0
     weights = {cat: raw_scores[cat] / score_sum for cat in categories}
@@ -231,6 +317,9 @@ def _compute_auto_quotas(
         "target_total": total,
         "min_per_category": min_per_category,
         "usage_ratio": usage_ratio,
+        "weight_step_failure": weight_step_failure,
+        "weight_accuracy_gap": weight_accuracy_gap,
+        "weight_error_propagation": weight_error_propagation,
     }
     return quotas, report
 
@@ -245,6 +334,10 @@ def build_finetune_dataset(
     max_total: int,
     usage_ratio: float,
     min_per_category: int,
+    strict_no_eval_overlap: bool,
+    weight_step_failure: float,
+    weight_accuracy_gap: float,
+    weight_error_propagation: float,
 ) -> tuple[list[dict], dict]:
 
     merged: list[dict] = []
@@ -259,6 +352,7 @@ def build_finetune_dataset(
                 merged.append(norm)
 
     merged = dedupe_examples(merged)
+    merged, leak_stats = _filter_eval_overlap(merged, strict=strict_no_eval_overlap)
 
     by_cat: dict[str, list[dict]] = defaultdict(list)
     for r in merged:
@@ -273,6 +367,9 @@ def build_finetune_dataset(
         max_total=max_total,
         usage_ratio=usage_ratio,
         min_per_category=min_per_category,
+        weight_step_failure=weight_step_failure,
+        weight_accuracy_gap=weight_accuracy_gap,
+        weight_error_propagation=weight_error_propagation,
     )
 
     curated = sample_by_quota(by_cat, quotas, seed=seed)
@@ -293,6 +390,7 @@ def build_finetune_dataset(
     report = {
         "source_rows": source_stats,
         "unique_pool_by_category": {k: len(v) for k, v in by_cat.items()},
+        "leak_filter": leak_stats,
         "auto_selection": auto_report,
         "target_quotas": quotas,
         "curated_rows": len(curated),
@@ -378,6 +476,14 @@ def main() -> None:
     parser.add_argument("--usage-ratio", type=float, default=0.9)
     parser.add_argument("--min-per-category", type=int, default=80)
     parser.add_argument(
+        "--allow-eval-overlap",
+        action="store_true",
+        help="Allow overlap with frozen eval IDs/prompts (NOT recommended).",
+    )
+    parser.add_argument("--weight-step-failure", type=float, default=0.45)
+    parser.add_argument("--weight-accuracy-gap", type=float, default=0.40)
+    parser.add_argument("--weight-error-prop", type=float, default=0.15)
+    parser.add_argument(
         "--source-files",
         nargs="+",
         default=None,
@@ -416,6 +522,10 @@ def main() -> None:
         max_total=args.max_total,
         usage_ratio=args.usage_ratio,
         min_per_category=args.min_per_category,
+        strict_no_eval_overlap=not args.allow_eval_overlap,
+        weight_step_failure=args.weight_step_failure,
+        weight_accuracy_gap=args.weight_accuracy_gap,
+        weight_error_propagation=args.weight_error_prop,
     )
     test_rows, test_report = build_combined_test_dataset(seed=args.seed)
 
