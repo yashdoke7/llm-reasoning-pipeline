@@ -14,6 +14,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import time
 from collections import defaultdict
@@ -95,6 +96,27 @@ def call_with_retry(client, prompt: str, model: str, max_retries: int = 3,
             logger.warning(f"Attempt {attempt+1}/{max_retries} failed: {e}. Retrying in {wait}s...")
             time.sleep(wait)
     raise RuntimeError(f"All {max_retries} attempts failed for model {model}")
+
+
+def _message_content(task: dict, role: str) -> str:
+    msgs = task.get("messages", [])
+    if not isinstance(msgs, list):
+        return ""
+    for m in msgs:
+        if isinstance(m, dict) and str(m.get("role", "")).lower() == role:
+            return str(m.get("content", "")).strip()
+    return ""
+
+
+def _extract_final_answer_from_text(text: str) -> str:
+    if not text:
+        return ""
+    m = re.search(r"Final\s+Answer\s*[:\-]\s*(.+)", text, flags=re.IGNORECASE | re.DOTALL)
+    if m:
+        ans = m.group(1).strip()
+        return ans.splitlines()[0].strip() if ans else ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return lines[-1] if lines else ""
 
 
 # ── task loading ──────────────────────────────────────────────────────────────
@@ -239,9 +261,30 @@ def evaluate_model(
     by_category: dict[str, list] = defaultdict(list)
 
     for i, task in enumerate(tasks):
-        problem = task.get("problem", task.get("prompt", task.get("input", "")))
-        expected = task.get("expected", task.get("answer", task.get("output", "")))
         category = task.get("category", "unknown")
+        user_msg = _message_content(task, "user")
+        assistant_msg = _message_content(task, "assistant")
+
+        # Support all dataset schemas used in this repo, including chat/message rows.
+        problem = (
+            task.get("problem")
+            or task.get("prompt")
+            or task.get("input")
+            or task.get("question")
+            or task.get("goal")
+            or task.get("premise")
+            or user_msg
+            or ""
+        )
+        expected = (
+            task.get("expected")
+            or task.get("answer")
+            or task.get("output")
+            or task.get("ground_truth")
+            or task.get("correct_answer")
+            or _extract_final_answer_from_text(assistant_msg)
+            or ""
+        )
 
         logger.info(f"  [{model_name}] Task {i+1}/{len(tasks)} | {category}")
 
@@ -326,7 +369,7 @@ def build_failure_report(
         "verdict": "",
     }
 
-    worst_regression = 0.0
+    worst_regression = float("-inf")
     worst_cat = None
 
     for cat in base_results.get("by_category", {}):
@@ -345,8 +388,8 @@ def build_failure_report(
             "ft_accuracy": ft_cat.get("accuracy", 0),
         }
 
-        if ft_sf > worst_regression:
-            worst_regression = ft_sf
+        if regression > worst_regression:
+            worst_regression = regression
             worst_cat = cat
 
     report["fine_tuning_target"] = worst_cat

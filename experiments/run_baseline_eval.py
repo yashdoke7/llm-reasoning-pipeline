@@ -720,6 +720,15 @@ def main() -> None:
     output_path = args.output or os.path.join(
         cfg["paths"]["outputs"], f"eval_results_{run_suffix}.json"
     )
+    if output_path.endswith(("/", "\\")) or not os.path.splitext(output_path)[1]:
+        normalized_output = os.path.join(output_path.rstrip("/\\"), "eval_results.json")
+        logger.warning(
+            "Output path '%s' looked like a directory; using '%s' instead.",
+            output_path,
+            normalized_output,
+        )
+        output_path = normalized_output
+
     metrics = aggregator.finalize(output_path=output_path)
     aggregator.finish_run()
 

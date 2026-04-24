@@ -234,10 +234,23 @@ class MetricsAggregator:
         }
 
         if output_path:
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            with open(output_path, "w", encoding="utf-8") as f:
+            # Support both file paths and accidental directory-like inputs
+            # (e.g. "outputs/run.json/" from shell quoting mistakes).
+            normalized_output = output_path
+            if output_path.endswith(("/", "\\")) or not os.path.splitext(output_path)[1]:
+                normalized_output = os.path.join(output_path.rstrip("/\\"), "eval_results.json")
+                logger.warning(
+                    "Output path '%s' looked like a directory; writing to '%s' instead.",
+                    output_path,
+                    normalized_output,
+                )
+
+            out_dir = os.path.dirname(normalized_output)
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
+            with open(normalized_output, "w", encoding="utf-8") as f:
                 json.dump(result, f, indent=2)
-            logger.info(f"Metrics saved to {output_path}")
+            logger.info(f"Metrics saved to {normalized_output}")
 
         # Log summary tables to W&B
         if self._use_wandb and self._wandb_run:

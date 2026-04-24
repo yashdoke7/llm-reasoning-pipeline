@@ -65,6 +65,12 @@ _SYSTEM_PROMPTS = {
         "Ground each step in facts or logical necessity. "
         "End with 'Final Answer: <your conclusion>' on its own line."
     ),
+    "physics_reasoning": (
+        "You are a precise physics problem solver. "
+        "Solve the problem step by step, showing formulas and substitutions clearly. "
+        "Number each reasoning step as 'Step 1:', 'Step 2:', etc. "
+        "End with 'Final Answer: <value and unit>' on its own line."
+    ),
 }
 
 _DEFAULT_SYSTEM = (
@@ -77,6 +83,10 @@ _DEFAULT_SYSTEM = (
 
 def _format_arithmetic(question: str, **_) -> str:
     return f"Problem: {question}"
+
+
+def _format_physics(question: str, **_) -> str:
+    return f"Physics problem: {question}"
 
 
 def _format_factual(context: str, questions: list[str], **_) -> str:
@@ -117,6 +127,7 @@ def _format_counterfactual(premise: str, question: str, **_) -> str:
 
 _FORMATTERS = {
     "multistep_arithmetic": _format_arithmetic,
+    "physics_reasoning": _format_physics,
     "factual_consistency": _format_factual,
     "tool_use_planning": _format_tool_use,
     "causal_counterfactual": _format_counterfactual,
@@ -327,6 +338,7 @@ class TaskDecomposer:
 
         task_fields depends on category:
           multistep_arithmetic: question
+          physics_reasoning:    question
           factual_consistency:  context, questions (list)
           tool_use_planning:    goal, available_tools, constraints
           causal_counterfactual: premise, question
