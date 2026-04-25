@@ -62,9 +62,9 @@ Source artifact: `outputs/final_results_for_ppt_2026-03-31/sanity_3b_targeted_v3
 
 The project includes publish-ready comparison visuals under `outputs/charts/`:
 
-![Accuracy Comparison](outputs/charts/hero_accuracy_comparison.png)
+![Accuracy Comparison](docs/figures/fig_overall_performance.png)
 
-![Step Failure Reduction](outputs/charts/hero_step_failure_reduction.png)
+![Step Failure Reduction](docs/figures/fig_step_failure_rate.png)
 
 > Note: This PPT snapshot is a sanity benchmark designed for fast comparability. For publication-grade conclusions, pair it with larger-sample runs in `outputs/final_*_20.json`.
 
