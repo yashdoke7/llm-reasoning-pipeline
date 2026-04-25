@@ -13,14 +13,8 @@ data_loaders/data/*.json
 data_loaders/data/*.jsonl
 data_loaders/data/*.csv
 
-docs/1) Internship Report First Page (Front Page) (1).docx
-docs/2) Internship Report Second Page(Certificate page) (1).docx
-docs/3) A INTERNSHIP REPORT format (1).docx
-docs/4) Internship_WorkbookFinal 2024-25 (1).docx
-docs/internship_report_detailed.md
-docs/presentation_final.md
 docs/Speech.txt
-docs/RESEARCH_READINESS_ROADMAP.md
+docs/report
 
 # Python temp
 __pycache__/
